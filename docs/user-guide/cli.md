@@ -12,18 +12,19 @@ Bash completion is installed automatically by the Docker image build and by
 
 ## Commands
 
-| Command            | Purpose                                            |
-| ------------------ | -------------------------------------------------- |
-| `train`            | Train models using PyTorch Lightning               |
-| `test`             | Evaluate models from a checkpoint                  |
-| `deploy`           | Export models to ONNX and TensorRT                 |
-| `mlflow ui`        | Launch the MLflow tracking UI                      |
-| `mlflow export`    | Export one experiment into its own MLflow store    |
-| `session start`    | Start a managed background task                    |
-| `session attach`   | View live terminal output from a background task   |
-| `session detach`   | Disconnect raw tmux clients from a managed session |
-| `session ls`       | List managed background tasks                      |
-| `session stop`     | Stop a managed background task                     |
+| Command            | Purpose                                             |
+| ------------------ | --------------------------------------------------- |
+| `train`            | Train models using PyTorch Lightning                |
+| `test`             | Evaluate models from a checkpoint                   |
+| `visualize`        | Preview predictions through the visualization stack |
+| `deploy`           | Export models to ONNX and TensorRT                  |
+| `mlflow ui`        | Launch the MLflow tracking UI                       |
+| `mlflow export`    | Export one experiment into its own MLflow store     |
+| `session start`    | Start a managed background task                     |
+| `session attach`   | View live terminal output from a background task    |
+| `session detach`   | Disconnect raw tmux clients from a managed session  |
+| `session ls`       | List managed background tasks                       |
+| `session stop`     | Stop a managed background task                      |
 
 ## train
 
@@ -132,6 +133,82 @@ autoware-ml test \
     --weights mlruns/segmentation3d/ptv3/voxel012_122m_t4dataset_j6gen2/<run_id>/artifacts/checkpoints/best.ckpt \
     --weights mlruns/detection3d/ptv3/voxel012_122m_t4dataset_j6gen2/<run_id>/artifacts/checkpoints/best.ckpt
 ```
+
+## visualize
+
+Preview one or more samples through the isolated visualization backend.
+
+```bash
+autoware-ml visualize \
+    --config-name <config_path> \
+    [--checkpoint <path>] \
+    [--mode auto|predictions|data] \
+    [--split test|predict|val|train] \
+    [--sample-index N] \
+    [--max-samples N] \
+    [--backend rerun|noop] \
+    [--device cpu|cuda|auto] \
+    [--point-labels/--no-point-labels] \
+    [--web-port PORT] \
+    [--grpc-port PORT] \
+    [--wait/--no-wait]
+```
+
+**Arguments:**
+
+- `--config-name`: Path to config (same as used for training)
+- `--checkpoint`: Optional path to a `.ckpt` checkpoint file
+
+**Common options:**
+
+- `--mode`: Preview mode. `auto` uses predictions when a checkpoint is given and transformed data otherwise (default: `auto`)
+- `--split`: Dataset split whose transforms and collation should be previewed; when a checkpoint is provided, the model-owned preprocessing and prediction path is used (default: `test`)
+- `--sample-index`: First sample index to preview (default: `0`)
+- `--max-samples`: Number of consecutive samples to preview (default: `1`)
+- `--backend`: Visualization backend (default: `rerun`)
+- `--device`: Execution device for preview inference (default: `auto`, which uses CUDA when available)
+- `--point-labels` / `--no-point-labels`: Log per-point text labels. Disabled by default because large semantic point clouds become slow when every point has text.
+- `--web-port`: Rerun web viewer HTTP port (default: `9090`)
+- `--grpc-port`: Rerun SDK gRPC port used by the web viewer proxy (default: `9876`)
+- `--wait` / `--no-wait`: Keep the Rerun web server alive after logging (default: `--wait`)
+- `--recording-id`: Optional explicit recording ID
+
+Backend modes:
+
+- `rerun`: serves the Rerun web viewer and logs the browser URL. Forward both `--web-port` and `--grpc-port` when running in Docker.
+- `noop`: runs the preview path and drops all visualization events. Use this for smoke tests and CI.
+
+When `--max-samples` is greater than `1`, Rerun logs every sample on the same
+timeline, so the viewer's bottom scrubber can move between them.
+
+**Example:**
+
+```bash
+autoware-ml visualize \
+    --config-name detection3d/centerpoint/voxel020_second_secfpn_51m_nuscenes \
+    --checkpoint mlruns/detection3d/centerpoint/voxel020_second_secfpn_51m_nuscenes/<run_id>/artifacts/checkpoints/best.ckpt \
+    --split test \
+    --sample-index 0 \
+    --backend rerun
+```
+
+Preview transformed data only, without a checkpoint:
+
+```bash
+autoware-ml visualize \
+    --config-name segmentation3d/ptv3/voxel012_122m_t4dataset_j6gen2 \
+    --mode data \
+    --device cpu \
+    --split train \
+    --sample-index 0 \
+    --backend rerun
+```
+
+Current visualization coverage:
+
+- calibration status: camera image, projected lidar overlay, fused image, status labels, and confidence summary
+- segmentation3d: class-colored point clouds with legends, optional ground truth, and confidence metrics
+- detection3d: class-labeled 3D boxes with legends, optional ground truth, and point-cloud context
 
 ## mlflow ui
 
