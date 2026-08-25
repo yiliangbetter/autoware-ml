@@ -83,6 +83,29 @@ def format_class_label(
     return f"{base} ({score:.2f})"
 
 
+def resolve_palette_size(
+    label_arrays: Sequence[np.ndarray | None],
+    class_names: Sequence[str] | None = None,
+) -> int:
+    """Return a palette size covering every declared class and observed label.
+
+    Sizing on the declared ``class_names`` as well as the labels present in the
+    current sample keeps the viewer legend stable while scrubbing the timeline:
+    without it, a sample containing only two of ten classes would publish a
+    two-entry legend and leave the remaining classes unnamed.
+    """
+    palette_size = 0
+    for labels in label_arrays:
+        if labels is None or labels.size == 0:
+            continue
+        valid_labels = labels[labels >= 0]
+        if valid_labels.size > 0:
+            palette_size = max(palette_size, int(valid_labels.max()) + 1)
+    if class_names is not None:
+        palette_size = max(palette_size, len(class_names))
+    return palette_size
+
+
 def build_class_annotation_context(
     root_path: str,
     palette: np.ndarray,

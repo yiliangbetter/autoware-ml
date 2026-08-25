@@ -48,3 +48,6 @@ class VisualizationBackend(Protocol):
 
     def log_events(self, events: Iterable[VisualizationEvent]) -> None:
         """Log multiple visualization events."""
+
+    def wait_until_interrupted(self) -> None:
+        """Block while an interactive viewer is served, or return immediately."""

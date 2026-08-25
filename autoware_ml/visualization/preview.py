@@ -27,6 +27,7 @@ from autoware_ml.datamodule.base import DataModule
 from autoware_ml.models.base import BaseModel
 from autoware_ml.visualization.common import as_numpy
 from autoware_ml.visualization.contracts import VisualizationSessionConfig
+from autoware_ml.visualization.detection3d import DETECTION_PREDICTION_KEY_SETS
 from autoware_ml.visualization.session import VisualizationSession
 
 PreviewSplit = Literal["train", "val", "test", "predict"]
@@ -102,7 +103,7 @@ def run_visualization_preview(
             _log_preview_sample(session, batch, predictions, dataset_index, mode, config, raw_info)
             visualized_count += 1
 
-    _wait_for_viewer(session.backend)
+    session.backend.wait_until_interrupted()
     return visualized_count
 
 
@@ -113,13 +114,6 @@ def _resolve_preview_mode(
     if mode == "auto":
         return "predictions" if model is not None else "data"
     return mode
-
-
-def _wait_for_viewer(backend: Any) -> None:
-    """Allow interactive backends to keep their viewer process alive."""
-    wait = getattr(backend, "wait_until_interrupted", None)
-    if wait is not None:
-        wait()
 
 
 def _build_preview_dataloader(
@@ -211,17 +205,33 @@ def _log_preview_sample(
 
 
 def _infer_preview_task(batch: dict[str, Any], predictions: Any) -> PreviewTask:
-    """Infer which task adapter should handle the preview sample."""
+    """Infer which task adapter should handle the preview sample.
+
+    Each task is matched on the full set of keys its adapter requires, so a
+    sample that satisfies more than one contract is reported as ambiguous
+    instead of being silently routed to whichever check happens to run first.
+    """
+    matches: list[PreviewTask] = []
     if "calibration_data" in batch:
-        return "calibration_status"
+        matches.append("calibration_status")
     if _has_segmentation_sample(batch) or _is_segmentation_predictions(predictions):
-        return "segmentation3d"
-    if (
-        _has_detection_sample(batch)
-        or _extract_single_detection_prediction(predictions) is not None
-    ):
-        return "detection3d"
-    raise ValueError("Could not infer a visualization task from the current batch and predictions.")
+        matches.append("segmentation3d")
+    if _has_detection_sample(batch) or _is_detection_predictions(predictions):
+        matches.append("detection3d")
+
+    if len(matches) == 1:
+        return matches[0]
+
+    observed_keys = ", ".join(sorted(batch)) or "<none>"
+    if not matches:
+        raise ValueError(
+            "Could not infer a visualization task from the current batch and predictions. "
+            f"Observed batch keys: {observed_keys}."
+        )
+    raise ValueError(
+        f"Ambiguous visualization task: sample matches {', '.join(matches)}. "
+        f"Observed batch keys: {observed_keys}."
+    )
 
 
 def _has_segmentation_sample(batch: dict[str, Any]) -> bool:
@@ -239,6 +249,14 @@ def _has_detection_sample(batch: dict[str, Any]) -> bool:
 def _is_segmentation_predictions(predictions: Any) -> bool:
     """Return whether prediction outputs match the segmentation contract."""
     return isinstance(predictions, dict) and "pred_labels" in predictions
+
+
+def _is_detection_predictions(predictions: Any) -> bool:
+    """Return whether prediction outputs carry a decoded 3D detection key set."""
+    candidate = _extract_single_detection_prediction(predictions)
+    if candidate is None:
+        return False
+    return any(key_set <= candidate.keys() for key_set in DETECTION_PREDICTION_KEY_SETS)
 
 
 def _log_calibration_preview(

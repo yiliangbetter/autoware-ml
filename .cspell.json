@@ -196,6 +196,7 @@
     "pretraining",
     "pullable",
     "pydantic",
+    "pylist",
     "pypi",
     "pytestmark",
     "pyproject",

@@ -80,7 +80,25 @@ This is the isolation boundary between task code and any concrete backend.
 It converts the neutral events into `rerun.Image`, `rerun.Points3D`,
 `rerun.Boxes3D`, `rerun.Transform3D`, and related entities.
 
-There is also a `NoOpVisualizationBackend` for disabled or test-only paths.
+There is also a `NoOpVisualizationBackend` for disabled or test-only paths. The
+Rerun backend is imported lazily, so the `noop` backend and the smoke tests
+built on it stay usable without the Rerun SDK installed.
+
+### Dependency compatibility
+
+`rerun-sdk` 0.23.1 declares `numpy>=1.23`, but its generated `__array__`
+implementations forward a `copy` argument that only NumPy 2.0 and later accept.
+Under the pinned `numpy==1.26.4` this makes every `AnnotationContext` serialize
+to an empty list, and because Rerun reports the failure as a warning rather than
+an exception, class legends disappear from the viewer while the recording still
+looks healthy.
+
+`rerun_backend.py` therefore patches `rerun.datatypes.ClassId.__array__` to drop
+the keyword when it is `None`, which restores NumPy 1.x support and leaves
+NumPy 2.x behaviour untouched. Backend startup then logs a probe legend and
+raises if it still serializes empty, so an incompatible dependency bump fails
+loudly instead of quietly dropping every legend. Remove the patch once the
+repository moves to NumPy 2.x or a Rerun release that fixes the conversion.
 
 ## Task Coverage
 
