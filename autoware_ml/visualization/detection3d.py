@@ -28,12 +28,21 @@ from autoware_ml.visualization.common import (
     build_sample_metadata_events,
     ensure_xyz,
     format_class_label,
+    resolve_palette_size,
 )
 from autoware_ml.visualization.events import (
     Boxes3DEvent,
     PointCloud3DEvent,
     ScalarEvent,
     VisualizationEvent,
+)
+
+
+#: Key sets that identify decoded 3D detection predictions. Shared with the
+#: preview task matcher so both stay in sync.
+DETECTION_PREDICTION_KEY_SETS: tuple[frozenset[str], ...] = (
+    frozenset({"bboxes_3d", "scores_3d", "labels_3d"}),
+    frozenset({"bboxes", "scores", "labels"}),
 )
 
 
@@ -55,8 +64,7 @@ def build_detection3d_data_events(
     if gt_boxes_np.shape[0] != gt_labels_np.shape[0]:
         raise ValueError("ground-truth boxes and labels must have the same length")
 
-    palette_size = int(gt_labels_np.max()) + 1 if gt_labels_np.size > 0 else 0
-    palette = build_label_palette(palette_size)
+    palette = build_label_palette(resolve_palette_size([gt_labels_np], class_names))
     events: list[VisualizationEvent] = build_sample_metadata_events(root_path, sample_name)
     annotation_context = build_class_annotation_context(root_path, palette, class_names)
     if annotation_context is not None:
@@ -96,11 +104,11 @@ def build_detection3d_data_events(
 
 def normalize_detection_predictions(predictions: Mapping[str, Any]) -> dict[str, np.ndarray]:
     """Normalize decoded 3D predictions into one shared visualization contract."""
-    if {"bboxes_3d", "scores_3d", "labels_3d"} <= predictions.keys():
+    if DETECTION_PREDICTION_KEY_SETS[0] <= predictions.keys():
         boxes = as_numpy(predictions["bboxes_3d"], np.float32)
         scores = as_numpy(predictions["scores_3d"], np.float32).reshape(-1)
         labels = as_numpy(predictions["labels_3d"], np.int64).reshape(-1)
-    elif {"bboxes", "scores", "labels"} <= predictions.keys():
+    elif DETECTION_PREDICTION_KEY_SETS[1] <= predictions.keys():
         boxes = as_numpy(predictions["bboxes"], np.float32)
         scores = as_numpy(predictions["scores"], np.float32).reshape(-1)
         labels = as_numpy(predictions["labels"], np.int64).reshape(-1)
@@ -134,15 +142,8 @@ def build_detection3d_events(
     pred_scores = normalized_predictions["scores"]
     pred_labels = normalized_predictions["labels"]
 
-    palette_size = int(pred_labels.max()) + 1 if pred_labels.size > 0 else 0
-    if gt_labels is not None:
-        gt_labels_np = as_numpy(gt_labels, np.int64).reshape(-1)
-        if gt_labels_np.size > 0:
-            palette_size = max(palette_size, int(gt_labels_np.max()) + 1)
-    else:
-        gt_labels_np = None
-
-    palette = build_label_palette(palette_size)
+    gt_labels_np = as_numpy(gt_labels, np.int64).reshape(-1) if gt_labels is not None else None
+    palette = build_label_palette(resolve_palette_size([pred_labels, gt_labels_np], class_names))
     events: list[VisualizationEvent] = build_sample_metadata_events(root_path, sample_name)
     annotation_context = build_class_annotation_context(root_path, palette, class_names)
     if annotation_context is not None:

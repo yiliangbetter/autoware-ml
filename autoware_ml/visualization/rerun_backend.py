@@ -46,6 +46,59 @@ def _load_rerun_module() -> Any:
     return import_module("rerun")
 
 
+def _patch_class_id_array_protocol() -> None:
+    """Make ``rerun.datatypes.ClassId`` convertible to NumPy under NumPy 1.x.
+
+    ``rerun-sdk`` 0.23.1 declares ``numpy>=1.23`` but its generated
+    ``__array__`` implementations forward their ``copy`` argument straight into
+    ``numpy.asarray``.  NumPy only accepts that keyword from 2.0 onwards, and
+    NumPy 1.x invokes ``__array__`` without it, so ``copy`` keeps its ``None``
+    default and the forwarded call raises ``TypeError``.  Rerun swallows that
+    error while serializing, which makes every ``AnnotationContext`` collapse to
+    an empty list and silently strips class legends from the viewer.
+
+    Dropping the keyword when it is ``None`` restores serialization on NumPy 1.x
+    and leaves NumPy 2.x behaviour untouched, since NumPy 2 always passes an
+    explicit ``copy`` value.
+    """
+    class_id_module = import_module("rerun.datatypes.class_id")
+    class_id_type = class_id_module.ClassId
+
+    def __array__(self: Any, dtype: Any = None, copy: bool | None = None) -> np.ndarray:
+        """Convert one class id to a NumPy array across NumPy 1.x and 2.x."""
+        if copy is None:
+            return np.asarray(self.id, dtype=dtype)
+        return np.asarray(self.id, dtype=dtype, copy=copy)
+
+    class_id_type.__array__ = __array__
+
+
+def _verify_annotation_context_support(rerun_module: Any) -> None:
+    """Fail loudly when semantic legends cannot reach the viewer.
+
+    Rerun reports serialization problems as warnings rather than exceptions, so
+    a broken ``AnnotationContext`` would otherwise degrade silently into a
+    viewer without class names or colors.
+    """
+    probe = rerun_module.AnnotationContext(
+        [rerun_module.AnnotationInfo(id=0, label="probe", color=(255, 0, 0, 255))]
+    )
+    for batch in probe.as_component_batches():
+        if "AnnotationContext#" not in str(batch.component_descriptor()):
+            continue
+        if batch.as_arrow_array().to_pylist() == [[]]:
+            raise RuntimeError(
+                "Rerun discarded a probe AnnotationContext, so class legends would be "
+                "missing from the viewer. This indicates an incompatible "
+                "rerun-sdk/numpy combination; expected rerun-sdk 0.23.1 with numpy 1.26.4."
+            )
+        return
+    raise RuntimeError(
+        "Rerun did not emit an AnnotationContext component for a probe legend; "
+        "the installed rerun-sdk is incompatible with this backend."
+    )
+
+
 def _yaw_to_quaternions(yaws: np.ndarray) -> np.ndarray:
     """Convert z-axis yaw angles to quaternions in xyzw order."""
     half_angles = yaws * 0.5
@@ -62,20 +115,40 @@ class _RerunVisualizationBackendBase:
         """Initialize one Rerun recording."""
         self.timeline = config.timeline
         self.rr = _load_rerun_module()
+        _patch_class_id_array_protocol()
+        _verify_annotation_context_support(self.rr)
         self.rr.init(
             config.application_id,
             recording_id=config.recording_id,
             spawn=spawn,
         )
 
+    def wait_until_interrupted(self) -> None:
+        """Return immediately because no viewer is served by default."""
+
     def set_step(self, step: int) -> None:
         """Advance the rerun timeline to one integer step."""
-        self.rr.set_time_sequence(self.timeline, int(step))
+        self.rr.set_time(self.timeline, sequence=int(step))
 
     def log_event(self, event: VisualizationEvent) -> None:
         """Translate one visualization event into rerun entities."""
         if isinstance(event, AnnotationContextEvent):
-            logger.debug("Skipping Rerun annotation context for %s.", event.path)
+            # Logged statically so one legend covers every frame on the timeline
+            # instead of being resolved per step by latest-at semantics.
+            self.rr.log(
+                event.path,
+                self.rr.AnnotationContext(
+                    [
+                        self.rr.AnnotationInfo(
+                            id=annotation.id,
+                            label=annotation.label,
+                            color=annotation.color,
+                        )
+                        for annotation in event.annotations
+                    ]
+                ),
+                static=True,
+            )
             return
 
         if isinstance(event, ImageEvent):
@@ -149,7 +222,7 @@ class _RerunVisualizationBackendBase:
             return
 
         if isinstance(event, ScalarEvent):
-            self.rr.log(event.path, self.rr.Scalar(event.value))
+            self.rr.log(event.path, self.rr.Scalars(event.value))
             return
 
         if isinstance(event, TextEvent):

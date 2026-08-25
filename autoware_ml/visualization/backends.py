@@ -20,7 +20,6 @@ from collections.abc import Iterable
 
 from autoware_ml.visualization.contracts import VisualizationBackend, VisualizationSessionConfig
 from autoware_ml.visualization.events import VisualizationEvent
-from autoware_ml.visualization.rerun_backend import RerunVisualizationBackend
 
 
 class NoOpVisualizationBackend:
@@ -39,13 +38,22 @@ class NoOpVisualizationBackend:
         for _ in events:
             continue
 
+    def wait_until_interrupted(self) -> None:
+        """Return immediately because no viewer is served."""
+
 
 def create_visualization_backend(
     config: VisualizationSessionConfig,
 ) -> VisualizationBackend:
-    """Create a concrete visualization backend from configuration."""
+    """Create a concrete visualization backend from configuration.
+
+    The Rerun backend is imported lazily so that the ``noop`` backend, and the
+    smoke tests built on it, stay usable in environments without the Rerun SDK.
+    """
     if config.backend == "noop":
         return NoOpVisualizationBackend()
     if config.backend == "rerun":
+        from autoware_ml.visualization.rerun_backend import RerunVisualizationBackend
+
         return RerunVisualizationBackend(config)
     raise ValueError(f"Unknown visualization backend: {config.backend}")

@@ -32,6 +32,7 @@ from autoware_ml.visualization.common import (
     build_sample_metadata_events,
     ensure_xyz,
     format_class_label,
+    resolve_palette_size,
 )
 from autoware_ml.visualization.events import (
     PointCloud3DEvent,
@@ -57,8 +58,7 @@ def build_segmentation3d_data_events(
     if labels_np.shape[0] != point_positions.shape[0]:
         raise ValueError("labels must have the same length as points")
 
-    palette_size = int(labels_np.max()) + 1 if labels_np.size > 0 else 0
-    palette = build_label_palette(palette_size)
+    palette = build_label_palette(resolve_palette_size([labels_np], class_names))
     radii = np.full((point_positions.shape[0],), point_radius, dtype=np.float32)
     label_text = _build_point_labels(labels_np, class_names, point_labels)
     events: list[VisualizationEvent] = build_sample_metadata_events(root_path, sample_name)
@@ -98,18 +98,14 @@ def build_segmentation3d_events(
     if pred_labels_np.shape[0] != point_positions.shape[0]:
         raise ValueError("predicted labels must have the same length as points")
 
-    palette_size = int(pred_labels_np.max()) + 1 if pred_labels_np.size > 0 else 0
     if gt_labels is not None:
         gt_labels_np = as_numpy(gt_labels, np.int64).reshape(-1)
         if gt_labels_np.shape[0] != point_positions.shape[0]:
             raise ValueError("ground-truth labels must have the same length as points")
-        valid_gt = gt_labels_np[gt_labels_np >= 0]
-        if valid_gt.size > 0:
-            palette_size = max(palette_size, int(valid_gt.max()) + 1)
     else:
         gt_labels_np = None
 
-    palette = build_label_palette(palette_size)
+    palette = build_label_palette(resolve_palette_size([pred_labels_np, gt_labels_np], class_names))
     radii = np.full((point_positions.shape[0],), point_radius, dtype=np.float32)
     pred_label_text = _build_point_labels(pred_labels_np, class_names, point_labels)
     events: list[VisualizationEvent] = build_sample_metadata_events(root_path, sample_name)
