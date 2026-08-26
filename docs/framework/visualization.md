@@ -132,6 +132,11 @@ The segmentation adapter can log:
 This matches the current segmentation prediction contract, which already
 returns `pred_labels` and `pred_probs`.
 
+Point positions are read from `points` when present, and from `coord` otherwise.
+PTv3 pipelines drop raw points during grid sampling, so their samples are
+matched and rendered through `coord`, with `coord[inverse]` restoring
+point-level positions that align with `origin_segment` labels.
+
 ### Detection 3D
 
 The detection adapter can log:

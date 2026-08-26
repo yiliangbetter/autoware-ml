@@ -23,7 +23,7 @@ import hydra
 import lightning as L
 from omegaconf import DictConfig
 
-from autoware_ml.utils.checkpoints import load_model_from_checkpoint
+from autoware_ml.utils.checkpoints import apply_matching_weights
 from autoware_ml.utils.runtime import (
     configure_torch_runtime,
     get_config_path,
@@ -86,12 +86,13 @@ def main(cfg: DictConfig) -> None:
         model.set_data_preprocessing(hydra.utils.instantiate(cfg.data_preprocessing))
 
         logger.info("Loading checkpoint: %s", checkpoint_path)
-        load_model_from_checkpoint(
+        apply_matching_weights(
             model,
             Path(checkpoint_path),
             map_location=device,
             device=device,
             set_eval=True,
+            logger=logger,
         )
     if preview_config.mode == "predictions" and checkpoint_path is None:
         raise ValueError("Checkpoint path must be provided for prediction visualization.")

@@ -30,6 +30,10 @@ from autoware_ml.visualization.contracts import VisualizationSessionConfig
 from autoware_ml.visualization.detection3d import DETECTION_PREDICTION_KEY_SETS
 from autoware_ml.visualization.session import VisualizationSession
 
+#: Per-point ground-truth label keys, most detailed first. Shared by the task
+#: matcher and the label lookup so both stay in sync.
+SEGMENTATION_LABEL_KEYS: tuple[str, ...] = ("origin_segment", "segment", "pts_semantic_mask")
+
 PreviewSplit = Literal["train", "val", "test", "predict"]
 PreviewMode = Literal["auto", "predictions", "data"]
 PreviewTask = Literal["calibration_status", "segmentation3d", "detection3d"]
@@ -235,10 +239,16 @@ def _infer_preview_task(batch: dict[str, Any], predictions: Any) -> PreviewTask:
 
 
 def _has_segmentation_sample(batch: dict[str, Any]) -> bool:
-    """Return whether the batch follows the segmentation3d schema."""
-    return batch.get("points") is not None and (
-        batch.get("segment") is not None or batch.get("pts_semantic_mask") is not None
-    )
+    """Return whether the batch follows the segmentation3d schema.
+
+    PTv3 pipelines drop raw ``points`` during grid sampling and carry positions
+    in ``coord`` instead, so either key counts as a point source. Without this
+    the transformed-data preview could not route any PTv3 segmentation config,
+    because that path has no predictions to fall back on.
+    """
+    has_positions = batch.get("points") is not None or batch.get("coord") is not None
+    has_labels = any(batch.get(key) is not None for key in SEGMENTATION_LABEL_KEYS)
+    return has_positions and has_labels
 
 
 def _has_detection_sample(batch: dict[str, Any]) -> bool:
@@ -416,7 +426,7 @@ def _unwrap_single_item(value: Any) -> Any:
 
 def _get_segmentation_gt_labels(batch: dict[str, Any]) -> Any:
     """Return the most detailed segmentation ground-truth labels available."""
-    for key in ("origin_segment", "segment", "pts_semantic_mask"):
+    for key in SEGMENTATION_LABEL_KEYS:
         labels = batch.get(key)
         if labels is not None:
             return labels

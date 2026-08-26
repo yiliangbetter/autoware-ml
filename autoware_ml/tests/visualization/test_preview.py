@@ -39,7 +39,9 @@ from autoware_ml.visualization.events import (
     TextEvent,
 )
 from autoware_ml.visualization.preview import (
+    SEGMENTATION_LABEL_KEYS,
     VisualizationPreviewConfig,
+    _has_segmentation_sample,
     resolve_preview_device,
     run_visualization_preview,
 )
@@ -163,6 +165,37 @@ def test_preview_reconstructs_points_for_voxelized_segmentation(
         if isinstance(event, PointCloud3DEvent) and event.path == "segmentation3d/prediction"
     )
     assert prediction.positions.shape == (3, 3)
+
+
+def test_preview_logs_transformed_voxelized_data_without_a_model(
+    preview_session: RecordingBackend,
+) -> None:
+    """PTv3 carries positions in ``coord``, so ``--mode data`` must still route.
+
+    This path has no predictions to fall back on, so requiring a ``points`` key
+    made transformed-data preview unusable for every PTv3 segmentation config.
+    """
+    sample = {
+        "coord": np.array([[0.0, 0.0, 0.0], [1.0, 1.0, 1.0]], dtype=np.float32),
+        "inverse": np.array([0, 1, 0], dtype=np.int64),
+        "origin_segment": np.array([0, 1, 0], dtype=np.int64),
+    }
+
+    visualized = run_visualization_preview(
+        None,
+        PreviewDataModule(
+            [sample],
+            {"coord": "concat", "inverse": "index_concat", "origin_segment": "concat"},
+        ),
+        VisualizationPreviewConfig(
+            mode="data", split="test", session=VisualizationSessionConfig(backend="noop")
+        ),
+    )
+
+    assert visualized == 1
+    assert preview_session.paths_of(PointCloud3DEvent) == ["transformed/segmentation3d/data"]
+    logged = next(event for event in preview_session.events if isinstance(event, PointCloud3DEvent))
+    assert logged.positions.shape == (3, 3)
 
 
 def test_preview_logs_a_detection_sample(preview_session: RecordingBackend) -> None:
@@ -331,6 +364,35 @@ def test_preview_rejects_a_sample_matching_two_tasks(
                 mode="data", split="test", session=VisualizationSessionConfig(backend="noop")
             ),
         )
+
+
+@pytest.mark.parametrize("position_key", ["points", "coord"])
+@pytest.mark.parametrize("label_key", SEGMENTATION_LABEL_KEYS)
+def test_segmentation_matcher_accepts_every_position_and_label_key(
+    position_key: str, label_key: str
+) -> None:
+    """Both point-source keys pair with every supported per-point label key."""
+    batch = {
+        position_key: np.zeros((2, 3), dtype=np.float32),
+        label_key: np.zeros((2,), dtype=np.int64),
+    }
+
+    assert _has_segmentation_sample(batch) is True
+
+
+@pytest.mark.parametrize(
+    "batch",
+    [
+        {"coord": np.zeros((2, 3), dtype=np.float32)},
+        {"segment": np.zeros((2,), dtype=np.int64)},
+        {},
+    ],
+    ids=["positions-only", "labels-only", "empty"],
+)
+def test_segmentation_matcher_needs_both_positions_and_labels(
+    batch: dict[str, Any],
+) -> None:
+    assert _has_segmentation_sample(batch) is False
 
 
 def test_resolve_preview_device_honors_explicit_devices() -> None:
