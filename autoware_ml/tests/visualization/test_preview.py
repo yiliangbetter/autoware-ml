@@ -32,6 +32,7 @@ from autoware_ml.tests.visualization.conftest import (
 from autoware_ml.utils.calibration import CalibrationData, CalibrationStatus
 from autoware_ml.visualization.contracts import VisualizationSessionConfig
 from autoware_ml.visualization.events import (
+    AnnotationContextEvent,
     Boxes3DEvent,
     ImageEvent,
     PointCloud3DEvent,
@@ -42,6 +43,7 @@ from autoware_ml.visualization.preview import (
     SEGMENTATION_LABEL_KEYS,
     VisualizationPreviewConfig,
     _has_segmentation_sample,
+    _resolve_class_names,
     resolve_preview_device,
     run_visualization_preview,
 )
@@ -78,6 +80,13 @@ _DETECTION_COLLATION = {
     "gt_boxes": "concat",
     "gt_labels": "concat",
     "class_names": "list",
+}
+#: Mirrors production collation, which carries no ``class_names`` key. Real
+#: split pipelines drop it, so the preview must recover names elsewhere.
+_DETECTION_COLLATION_WITHOUT_CLASS_NAMES = {
+    "points": "concat",
+    "gt_boxes": "concat",
+    "gt_labels": "concat",
 }
 _SEGMENTATION_COLLATION = {"points": "concat", "segment": "concat"}
 
@@ -210,6 +219,48 @@ def test_preview_logs_a_detection_sample(preview_session: RecordingBackend) -> N
         "detection3d/prediction",
         "detection3d/ground_truth",
     ]
+
+
+def test_resolve_class_names_prefers_the_configured_names() -> None:
+    config = VisualizationPreviewConfig(class_names=("configured",))
+
+    resolved = _resolve_class_names(
+        config, {"class_names": [["collated"]]}, {"class_names": ["raw"]}
+    )
+
+    assert resolved == ("configured",)
+
+
+def test_resolve_class_names_falls_back_to_the_raw_dataset_info() -> None:
+    """Split pipelines drop class names, leaving raw dataset info the only source."""
+    resolved = _resolve_class_names(_NOOP_PREVIEW, {}, {"class_names": ["car", "truck"]})
+
+    assert resolved == ["car", "truck"]
+
+
+def test_resolve_class_names_returns_none_when_no_source_carries_them() -> None:
+    assert _resolve_class_names(_NOOP_PREVIEW, {}, None) is None
+
+
+def test_preview_names_detection_instances_without_collated_class_names(
+    preview_session: RecordingBackend,
+) -> None:
+    """Boxes and legend must read as names even when collation drops class names."""
+    visualized = run_visualization_preview(
+        None,
+        PreviewDataModule([_detection_sample()], _DETECTION_COLLATION_WITHOUT_CLASS_NAMES),
+        VisualizationPreviewConfig(
+            mode="data", split="test", session=VisualizationSessionConfig(backend="noop")
+        ),
+    )
+
+    assert visualized == 1
+    boxes = next(event for event in preview_session.events if isinstance(event, Boxes3DEvent))
+    assert boxes.labels == ["car"]
+    legend = next(
+        event for event in preview_session.events if isinstance(event, AnnotationContextEvent)
+    )
+    assert [annotation.label for annotation in legend.annotations] == ["pedestrian", "car"]
 
 
 def test_preview_logs_transformed_data_without_a_model(

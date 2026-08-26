@@ -16,6 +16,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
@@ -49,6 +50,7 @@ class VisualizationPreviewConfig:
     max_samples: int = 1
     device: str = "auto"
     point_labels: bool = False
+    class_names: tuple[str, ...] | None = None
     session: VisualizationSessionConfig = VisualizationSessionConfig()
 
 
@@ -197,12 +199,12 @@ def _log_preview_sample(
         return
     if task == "detection3d":
         if mode == "data":
-            _log_detection_data_preview(session, batch, sample_name)
+            _log_detection_data_preview(session, batch, sample_name, config, raw_info)
             return
         detection_predictions = _extract_single_detection_prediction(predictions)
         if detection_predictions is None:
             raise ValueError("Could not normalize detection predictions for visualization.")
-        _log_detection_preview(session, batch, detection_predictions, sample_name)
+        _log_detection_preview(session, batch, detection_predictions, sample_name, config, raw_info)
         return
 
     raise ValueError(f"Unsupported visualization task: {task}")
@@ -236,6 +238,30 @@ def _infer_preview_task(batch: dict[str, Any], predictions: Any) -> PreviewTask:
         f"Ambiguous visualization task: sample matches {', '.join(matches)}. "
         f"Observed batch keys: {observed_keys}."
     )
+
+
+def _resolve_class_names(
+    config: VisualizationPreviewConfig,
+    batch: dict[str, Any],
+    raw_info: dict[str, Any] | None,
+) -> Sequence[str] | None:
+    """Resolve semantic class names for one preview sample.
+
+    Class names decide whether the viewer legend and per-instance labels read as
+    names or as bare integer ids, so they are looked up from every source that
+    can carry them. Split transform pipelines drop ``class_names`` before
+    collation, which leaves the batch empty for every task, so the raw dataset
+    info is consulted as well; segmentation pipelines carry them in neither and
+    depend on the configured value.
+    """
+    for candidate in (
+        config.class_names,
+        _unwrap_single_item(batch.get("class_names")),
+        (raw_info or {}).get("class_names"),
+    ):
+        if candidate is not None and len(candidate) > 0:
+            return candidate
+    return None
 
 
 def _has_segmentation_sample(batch: dict[str, Any]) -> bool:
@@ -321,7 +347,7 @@ def _log_segmentation_data_preview(
     session.log_segmentation3d_data(
         _get_segmentation_points(batch, gt_labels),
         _unwrap_single_item(gt_labels),
-        class_names=_unwrap_single_item(batch.get("class_names")),
+        class_names=_resolve_class_names(config, batch, raw_info),
         point_labels=config.point_labels,
         sample_name=sample_name,
         root_path="dataset/segmentation3d",
@@ -333,13 +359,15 @@ def _log_detection_data_preview(
     session: VisualizationSession,
     batch: dict[str, Any],
     sample_name: str,
+    config: VisualizationPreviewConfig,
+    raw_info: dict[str, Any] | None = None,
 ) -> None:
     """Render one transformed detection sample without predictions."""
     session.log_detection3d_data(
         points=_unwrap_single_item(batch.get("points")),
         gt_boxes=_unwrap_single_item(batch.get("gt_boxes")),
         gt_labels=_unwrap_single_item(batch.get("gt_labels")),
-        class_names=_unwrap_single_item(batch.get("class_names")),
+        class_names=_resolve_class_names(config, batch, raw_info),
         sample_name=sample_name,
         root_path="dataset/detection3d",
     )
@@ -361,7 +389,7 @@ def _log_segmentation_preview(
         pred_labels,
         pred_probs=predictions.get("pred_probs"),
         gt_labels=_unwrap_single_item(gt_labels),
-        class_names=_unwrap_single_item(batch.get("class_names")),
+        class_names=_resolve_class_names(config, batch, raw_info),
         point_labels=config.point_labels,
         sample_name=sample_name,
     )
@@ -386,6 +414,8 @@ def _log_detection_preview(
     batch: dict[str, Any],
     predictions: dict[str, Any],
     sample_name: str,
+    config: VisualizationPreviewConfig,
+    raw_info: dict[str, Any] | None = None,
 ) -> None:
     """Render one 3D detection preview sample."""
     session.log_detection3d(
@@ -393,7 +423,7 @@ def _log_detection_preview(
         points=_unwrap_single_item(batch.get("points")),
         gt_boxes=_unwrap_single_item(batch.get("gt_boxes")),
         gt_labels=_unwrap_single_item(batch.get("gt_labels")),
-        class_names=_unwrap_single_item(batch.get("class_names")),
+        class_names=_resolve_class_names(config, batch, raw_info),
         sample_name=sample_name,
     )
 
