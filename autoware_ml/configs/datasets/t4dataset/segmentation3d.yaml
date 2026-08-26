@@ -39,6 +39,7 @@ class_mapping:
   out_of_sync: ${t4dataset.segmentation3d.ignore_index}
   unpainted: ${t4dataset.segmentation3d.ignore_index}
 num_classes: 15
+class_names: ${seg_class_names:${t4dataset.segmentation3d.class_mapping}, ${t4dataset.segmentation3d.num_classes}}
 metrics:
   - _target_: autoware_ml.metrics.segmentation3d.suite.Segmentation3DMetricSuite
     components:
@@ -47,7 +48,7 @@ metrics:
       - { _target_: autoware_ml.metrics.segmentation3d.precision_recall_f1.PrecisionRecallF1, stages: [val, test] }
     num_classes: ${t4dataset.segmentation3d.num_classes}
     ignore_index: ${t4dataset.segmentation3d.ignore_index}
-    class_names: ${seg_class_names:${t4dataset.segmentation3d.class_mapping}, ${t4dataset.segmentation3d.num_classes}}
+    class_names: ${t4dataset.segmentation3d.class_names}
     ranges:
       - _target_: autoware_ml.metrics.base.MetricRange
         name: 0-50m
