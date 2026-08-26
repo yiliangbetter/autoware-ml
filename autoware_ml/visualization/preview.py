@@ -279,7 +279,7 @@ def _log_calibration_preview(
     """Render one calibration-status preview sample."""
     calibration_data = _unwrap_single_item(batch["calibration_data"])
     pred_status: int | None = None
-    root_path = "transformed/calibration_status" if mode == "data" else "calibration_status"
+    root_path = "dataset/calibration_status" if mode == "data" else "calibration_status"
     if mode == "predictions":
         pred_probs = as_numpy(predictions)
         pred_probs = pred_probs[0] if pred_probs.ndim > 1 else pred_probs
@@ -324,7 +324,7 @@ def _log_segmentation_data_preview(
         class_names=_unwrap_single_item(batch.get("class_names")),
         point_labels=config.point_labels,
         sample_name=sample_name,
-        root_path="transformed/segmentation3d",
+        root_path="dataset/segmentation3d",
     )
     _log_camera_preview(session, raw_info)
 
@@ -341,7 +341,7 @@ def _log_detection_data_preview(
         gt_labels=_unwrap_single_item(batch.get("gt_labels")),
         class_names=_unwrap_single_item(batch.get("class_names")),
         sample_name=sample_name,
-        root_path="transformed/detection3d",
+        root_path="dataset/detection3d",
     )
 
 

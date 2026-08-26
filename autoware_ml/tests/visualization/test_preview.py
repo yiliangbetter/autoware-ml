@@ -193,7 +193,7 @@ def test_preview_logs_transformed_voxelized_data_without_a_model(
     )
 
     assert visualized == 1
-    assert preview_session.paths_of(PointCloud3DEvent) == ["transformed/segmentation3d/data"]
+    assert preview_session.paths_of(PointCloud3DEvent) == ["dataset/segmentation3d/data"]
     logged = next(event for event in preview_session.events if isinstance(event, PointCloud3DEvent))
     assert logged.positions.shape == (3, 3)
 
@@ -224,8 +224,8 @@ def test_preview_logs_transformed_data_without_a_model(
     )
 
     assert visualized == 1
-    assert preview_session.paths_of(PointCloud3DEvent) == ["transformed/segmentation3d/data"]
-    assert "transformed/segmentation3d/meta/sample" in preview_session.paths_of(TextEvent)
+    assert preview_session.paths_of(PointCloud3DEvent) == ["dataset/segmentation3d/data"]
+    assert "dataset/segmentation3d/meta/sample" in preview_session.paths_of(TextEvent)
 
 
 def test_preview_scrubs_multiple_samples_on_the_shared_timeline(
