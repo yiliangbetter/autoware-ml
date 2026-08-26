@@ -131,7 +131,7 @@ def test_build_calibration_status_events_honors_the_root_path(
     events = build_calibration_status_events(
         preview_calibration_data,
         sample_name="sample-1",
-        root_path="transformed/calibration_status",
+        root_path="dataset/calibration_status",
     )
 
-    assert all(event.path.startswith("transformed/calibration_status") for event in events)
+    assert all(event.path.startswith("dataset/calibration_status") for event in events)
