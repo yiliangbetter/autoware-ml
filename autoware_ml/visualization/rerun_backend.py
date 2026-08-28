@@ -41,6 +41,24 @@ from autoware_ml.visualization.events import (
 logger = logging.getLogger(__name__)
 
 
+def _without_archetype_indicators(entity: Any) -> Any:
+    """Return an archetype's component batches without Rerun UI indicators."""
+    if not hasattr(entity, "as_component_batches"):
+        return entity
+
+    component_batches = []
+    for batch in entity.as_component_batches():
+        descriptor = batch.component_descriptor()
+        component_name = getattr(descriptor, "component_name", None)
+        if callable(component_name):
+            component_name = component_name()
+        if component_name is None:
+            component_name = str(descriptor)
+        if not str(component_name).endswith("Indicator"):
+            component_batches.append(batch)
+    return component_batches
+
+
 def _load_rerun_module() -> Any:
     """Load the optional rerun dependency lazily."""
     return import_module("rerun")
@@ -137,56 +155,58 @@ class _RerunVisualizationBackendBase:
             # instead of being resolved per step by latest-at semantics.
             self.rr.log(
                 event.path,
-                self.rr.AnnotationContext(
-                    [
-                        self.rr.AnnotationInfo(
-                            id=annotation.id,
-                            label=annotation.label,
-                            color=annotation.color,
-                        )
-                        for annotation in event.annotations
-                    ]
+                _without_archetype_indicators(
+                    self.rr.AnnotationContext(
+                        [
+                            self.rr.AnnotationInfo(
+                                id=annotation.id,
+                                label=annotation.label,
+                                color=annotation.color,
+                            )
+                            for annotation in event.annotations
+                        ]
+                    )
                 ),
                 static=True,
             )
             return
 
         if isinstance(event, ImageEvent):
-            self.rr.log(event.path, self.rr.Image(event.image))
+            self.rr.log(event.path, _without_archetype_indicators(self.rr.Image(event.image)))
             return
 
         if isinstance(event, PointCloud3DEvent):
             self.rr.log(
                 event.path,
-                self.rr.Points3D(
+                _without_archetype_indicators(self.rr.Points3D(
                     event.positions,
                     colors=event.colors,
                     labels=event.labels,
                     radii=event.radii,
                     show_labels=event.labels is not None,
                     class_ids=event.class_ids,
-                ),
+                )),
             )
             return
 
         if isinstance(event, Points2DEvent):
             self.rr.log(
                 event.path,
-                self.rr.Points2D(
+                _without_archetype_indicators(self.rr.Points2D(
                     event.positions,
                     colors=event.colors,
                     labels=event.labels,
                     radii=event.radii,
                     show_labels=event.labels is not None,
                     class_ids=event.class_ids,
-                ),
+                )),
             )
             return
 
         if isinstance(event, Boxes3DEvent):
             self.rr.log(
                 event.path,
-                self.rr.Boxes3D(
+                _without_archetype_indicators(self.rr.Boxes3D(
                     centers=event.centers,
                     sizes=event.sizes,
                     quaternions=_yaw_to_quaternions(event.yaws),
@@ -195,18 +215,18 @@ class _RerunVisualizationBackendBase:
                     radii=event.radii,
                     show_labels=event.labels is not None,
                     class_ids=event.class_ids,
-                ),
+                )),
             )
             return
 
         if isinstance(event, Transform3DEvent):
             self.rr.log(
                 event.path,
-                self.rr.Transform3D(
+                _without_archetype_indicators(self.rr.Transform3D(
                     translation=event.translation,
                     mat3x3=event.rotation_matrix,
                     relation=self.rr.TransformRelation.ChildFromParent,
-                ),
+                )),
             )
             return
 
@@ -214,19 +234,19 @@ class _RerunVisualizationBackendBase:
             width, height = event.resolution
             self.rr.log(
                 event.path,
-                self.rr.Pinhole(
+                _without_archetype_indicators(self.rr.Pinhole(
                     image_from_camera=event.image_from_camera,
                     resolution=(width, height),
-                ),
+                )),
             )
             return
 
         if isinstance(event, ScalarEvent):
-            self.rr.log(event.path, self.rr.Scalars(event.value))
+            self.rr.log(event.path, _without_archetype_indicators(self.rr.Scalars(event.value)))
             return
 
         if isinstance(event, TextEvent):
-            self.rr.log(event.path, self.rr.TextLog(event.text, level=event.level))
+            self.rr.log(event.path, _without_archetype_indicators(self.rr.TextLog(event.text, level=event.level)))
             return
 
         raise TypeError(f"Unsupported visualization event: {type(event)!r}")

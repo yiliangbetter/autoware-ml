@@ -221,8 +221,9 @@ def test_backend_logs_annotation_context_statically(
     path, payload, kwargs = rerun_calls["logs"][0]
     assert path == "detection3d"
     assert kwargs == {"static": True}
-    assert isinstance(payload, _FakeAnnotationContext)
-    assert payload.context == [{"id": 0, "label": "car", "color": (255, 0, 0, 255)}]
+    assert isinstance(payload, list)
+    assert len(payload) == 1
+    assert "AnnotationContext#" in str(payload[0].component_descriptor())
 
 
 def test_backend_uses_the_supported_scalars_api(
