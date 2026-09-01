@@ -31,6 +31,9 @@ from autoware_ml.visualization.events import (
 )
 
 _IN_FRONT_OF_CAMERA = np.array([[0.0, 0.0, 10.0, 0.4]], dtype=np.float32)
+_FUSED_IMAGE = np.zeros((720, 1280, 5), dtype=np.float32)
+_FUSED_IMAGE[100, 100, 3] = 0.5
+_FUSED_IMAGE[200, 200, 4] = 0.8
 
 
 def test_build_calibration_status_events_includes_frames_and_status(
@@ -40,7 +43,7 @@ def test_build_calibration_status_events_includes_frames_and_status(
         preview_calibration_data,
         points=_IN_FRONT_OF_CAMERA,
         image=np.zeros((720, 1280, 3), dtype=np.uint8),
-        fused_image=np.zeros((720, 1280, 5), dtype=np.float32),
+        fused_image=_FUSED_IMAGE,
         gt_status=CalibrationStatus.CALIBRATED.value,
         pred_status=CalibrationStatus.MISCALIBRATED.value,
         pred_score=0.9,
@@ -52,6 +55,17 @@ def test_build_calibration_status_events_includes_frames_and_status(
     assert "calibration_status/lidar/points" in paths
     assert "calibration_status/status/gt_label" in paths
     assert "calibration_status/status/pred_label" in paths
+    assert "calibration_status/camera/fused" in paths
+    assert "calibration_status/camera/fused/depth" in paths
+    assert "calibration_status/camera/fused/intensity" in paths
+    fused_overlays = {
+        event.path: event
+        for event in events
+        if isinstance(event, Points2DEvent)
+        and event.path.startswith("calibration_status/camera/fused/")
+    }
+    assert fused_overlays["calibration_status/camera/fused/depth"].positions.shape == (1, 2)
+    assert fused_overlays["calibration_status/camera/fused/intensity"].positions.shape == (1, 2)
     assert any(
         isinstance(event, Points2DEvent)
         and event.path == "calibration_status/camera/image/projected_points"
