@@ -43,6 +43,7 @@ from autoware_ml.visualization.preview import (
     SEGMENTATION_LABEL_KEYS,
     VisualizationPreviewConfig,
     _has_segmentation_sample,
+    _infer_preview_task,
     _resolve_class_names,
     resolve_preview_device,
     run_visualization_preview,
@@ -205,6 +206,17 @@ def test_preview_logs_transformed_voxelized_data_without_a_model(
     assert preview_session.paths_of(PointCloud3DEvent) == ["dataset/segmentation3d/data"]
     logged = next(event for event in preview_session.events if isinstance(event, PointCloud3DEvent))
     assert logged.positions.shape == (3, 3)
+
+
+def test_preview_routes_combined_detection_and_segmentation_to_both_adapters() -> None:
+    batch = {
+        "points": np.zeros((2, 4), dtype=np.float32),
+        "gt_boxes": np.zeros((1, 7), dtype=np.float32),
+        "gt_labels": np.zeros((1,), dtype=np.int64),
+        "segment": np.zeros((2,), dtype=np.int64),
+    }
+
+    assert _infer_preview_task(batch, None) == "multi"
 
 
 def test_preview_logs_a_detection_sample(preview_session: RecordingBackend) -> None:
@@ -388,10 +400,10 @@ def test_preview_reports_observed_keys_when_no_task_matches(
         )
 
 
-def test_preview_rejects_a_sample_matching_two_tasks(
+def test_preview_routes_a_sample_matching_two_tasks(
     preview_session: RecordingBackend,
 ) -> None:
-    """Multi-task samples must fail loudly rather than pick whichever check runs first."""
+    """Multi-task samples are rendered through both task adapters."""
     sample = {
         "points": np.array([[0.0, 0.0, 0.0, 1.0], [1.0, 0.0, 0.0, 1.0]], dtype=np.float32),
         "segment": np.array([0, 1], dtype=np.int64),
@@ -399,22 +411,25 @@ def test_preview_rejects_a_sample_matching_two_tasks(
         "gt_labels": np.array([1], dtype=np.int64),
     }
 
-    with pytest.raises(ValueError, match="Ambiguous visualization task"):
-        run_visualization_preview(
-            None,
-            PreviewDataModule(
-                [sample],
-                {
-                    "points": "concat",
-                    "segment": "concat",
-                    "gt_boxes": "concat",
-                    "gt_labels": "concat",
-                },
-            ),
-            VisualizationPreviewConfig(
-                mode="data", split="test", session=VisualizationSessionConfig(backend="noop")
-            ),
-        )
+    visualized = run_visualization_preview(
+        None,
+        PreviewDataModule(
+            [sample],
+            {
+                "points": "concat",
+                "segment": "concat",
+                "gt_boxes": "concat",
+                "gt_labels": "concat",
+            },
+        ),
+        VisualizationPreviewConfig(
+            mode="data", split="test", session=VisualizationSessionConfig(backend="noop")
+        ),
+    )
+
+    assert visualized == 1
+    assert "dataset/segmentation3d/data" in preview_session.paths_of(PointCloud3DEvent)
+    assert "dataset/detection3d/ground_truth" in preview_session.paths_of(Boxes3DEvent)
 
 
 @pytest.mark.parametrize("position_key", ["points", "coord"])

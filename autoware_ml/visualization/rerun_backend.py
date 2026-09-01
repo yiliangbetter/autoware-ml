@@ -122,6 +122,7 @@ class _RerunVisualizationBackendBase:
             recording_id=config.recording_id,
             spawn=spawn,
         )
+        self._fused_blueprint_sent = False
 
     def wait_until_interrupted(self) -> None:
         """Return immediately because no viewer is served by default."""
@@ -231,9 +232,54 @@ class _RerunVisualizationBackendBase:
 
         raise TypeError(f"Unsupported visualization event: {type(event)!r}")
 
+    def _send_fused_blueprint_if_needed(self, events: list[VisualizationEvent]) -> None:
+        """Put the fused image and its layers in one Rerun 2D view."""
+        if self._fused_blueprint_sent:
+            return
+        fused_paths = [
+            event.path
+            for event in events
+            if isinstance(event, ImageEvent) and event.path.endswith("/camera/fused")
+        ]
+        raw_paths = [
+            event.path
+            for event in events
+            if isinstance(event, ImageEvent) and event.path.endswith("/camera/image")
+        ]
+        if not fused_paths:
+            return
+        fused_path = fused_paths[0]
+        raw_path = raw_paths[0] if raw_paths else None
+        self.rr.send_blueprint(
+            self.rr.blueprint.Blueprint(
+                self.rr.blueprint.Horizontal(
+                    *([
+                        self.rr.blueprint.Spatial2DView(
+                            name="Raw camera",
+                            origin=raw_path,
+                            contents=[raw_path, f"{raw_path}/projected_points"],
+                        )
+                    ] if raw_path else []),
+                    self.rr.blueprint.Spatial2DView(
+                        name="Fused camera",
+                        origin=fused_path,
+                        contents=[
+                            fused_path,
+                            f"{fused_path}/depth",
+                            f"{fused_path}/intensity",
+                        ],
+                    ),
+                ),
+                auto_views=False,
+            )
+        )
+        self._fused_blueprint_sent = True
+
     def log_events(self, events: Iterable[VisualizationEvent]) -> None:
         """Log multiple visualization events."""
-        for event in events:
+        event_list = list(events)
+        self._send_fused_blueprint_if_needed(event_list)
+        for event in event_list:
             self.log_event(event)
 
 

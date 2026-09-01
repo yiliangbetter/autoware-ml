@@ -20,8 +20,9 @@ import cv2
 import numpy as np
 
 from autoware_ml.utils.calibration import CalibrationData, CalibrationStatus
-from autoware_ml.visualization.colors import depths_to_colors
+from autoware_ml.visualization.colors import depths_to_colors, scalar_to_heatmap_colors
 from autoware_ml.visualization.common import (
+    as_numpy,
     build_sample_metadata_events,
     ensure_image_uint8,
     ensure_xyz,
@@ -41,6 +42,25 @@ _STATUS_TEXT = {
     CalibrationStatus.MISCALIBRATED.value: "miscalibrated",
     CalibrationStatus.CALIBRATED.value: "calibrated",
 }
+
+
+def _fused_channel_points(fused_image: Any, channel: int) -> tuple[np.ndarray, np.ndarray]:
+    """Extract nonzero normalized BGRDI pixels as a 2D heatmap point overlay."""
+    array = as_numpy(fused_image)
+    if array.ndim != 3:
+        raise ValueError(
+            f"fused_image must have shape (H, W, 5) or (5, H, W), got {array.shape}"
+        )
+    if array.shape[0] <= 8 and array.shape[1] > 8 and array.shape[2] > 8:
+        array = np.transpose(array, (1, 2, 0))
+    if array.shape[2] < 5:
+        raise ValueError(f"fused_image must have five channels, got {array.shape}")
+    values = np.clip(array[:, :, channel], 0.0, 1.0).astype(np.float32, copy=False)
+    valid = values > 0.0
+    rows, columns = np.nonzero(valid)
+    positions = np.column_stack((columns, rows)).astype(np.float32, copy=False)
+    colors = scalar_to_heatmap_colors(values[valid], alpha=220)
+    return positions, colors
 
 
 def _project_points_to_image(
@@ -176,7 +196,28 @@ def build_calibration_status_events(
                 )
 
     if fused_image is not None:
-        events.append(ImageEvent(f"{root_path}/camera/fused", ensure_image_uint8(fused_image)))
+        fused_path = f"{root_path}/camera/fused"
+        events.append(ImageEvent(fused_path, ensure_image_uint8(fused_image)))
+        depth_positions, depth_colors = _fused_channel_points(fused_image, 3)
+        if depth_positions.shape[0] > 0:
+            events.append(
+                Points2DEvent(
+                    f"{fused_path}/depth",
+                    positions=depth_positions,
+                    colors=depth_colors,
+                    radii=np.full((depth_positions.shape[0],), 2.0, dtype=np.float32),
+                )
+            )
+        intensity_positions, intensity_colors = _fused_channel_points(fused_image, 4)
+        if intensity_positions.shape[0] > 0:
+            events.append(
+                Points2DEvent(
+                    f"{fused_path}/intensity",
+                    positions=intensity_positions,
+                    colors=intensity_colors,
+                    radii=np.full((intensity_positions.shape[0],), 2.0, dtype=np.float32),
+                )
+            )
 
     if points is not None:
         point_positions = ensure_xyz(points)

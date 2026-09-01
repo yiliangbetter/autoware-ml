@@ -37,7 +37,7 @@ SEGMENTATION_LABEL_KEYS: tuple[str, ...] = ("origin_segment", "segment", "pts_se
 
 PreviewSplit = Literal["train", "val", "test", "predict"]
 PreviewMode = Literal["auto", "predictions", "data"]
-PreviewTask = Literal["calibration_status", "segmentation3d", "detection3d"]
+PreviewTask = Literal["calibration_status", "segmentation3d", "detection3d", "multi"]
 
 
 @dataclass(frozen=True)
@@ -104,6 +104,18 @@ def run_visualization_preview(
                 if mode == "predictions" and model is not None
                 else None
             )
+            if (
+                mode == "predictions"
+                and model is not None
+                and _is_multitask_predictions(predictions)
+            ):
+                build_eval_output = getattr(model, "build_eval_output", None)
+                if build_eval_output is None:
+                    raise ValueError(
+                        "Multi-task prediction output requires the model to provide "
+                        "build_eval_output for visualization."
+                    )
+                predictions = build_eval_output(batch, predictions)
             raw_info = dataset.get_data_info(dataset_index)
             session.set_step(dataset_index)
             _log_preview_sample(session, batch, predictions, dataset_index, mode, config, raw_info)
@@ -206,6 +218,9 @@ def _log_preview_sample(
             raise ValueError("Could not normalize detection predictions for visualization.")
         _log_detection_preview(session, batch, detection_predictions, sample_name, config, raw_info)
         return
+    if task == "multi":
+        _log_multitask_preview(session, batch, predictions, sample_name, config, raw_info, mode)
+        return
 
     raise ValueError(f"Unsupported visualization task: {task}")
 
@@ -217,6 +232,11 @@ def _infer_preview_task(batch: dict[str, Any], predictions: Any) -> PreviewTask:
     sample that satisfies more than one contract is reported as ambiguous
     instead of being silently routed to whichever check happens to run first.
     """
+    if _is_multitask_predictions(predictions) or (
+        _has_segmentation_sample(batch) and _has_detection_sample(batch)
+    ):
+        return "multi"
+
     matches: list[PreviewTask] = []
     if "calibration_data" in batch:
         matches.append("calibration_status")
@@ -295,6 +315,16 @@ def _is_detection_predictions(predictions: Any) -> bool:
     return any(key_set <= candidate.keys() for key_set in DETECTION_PREDICTION_KEY_SETS)
 
 
+def _is_multitask_predictions(predictions: Any) -> bool:
+    """Return whether outputs contain decoded multi-task branches."""
+    if not isinstance(predictions, dict):
+        return False
+    return (
+        {"predictions", "seg_pred_labels"} <= predictions.keys()
+        or {"seg_logits", "det_outputs"} <= predictions.keys()
+    )
+
+
 def _log_calibration_preview(
     session: VisualizationSession,
     batch: dict[str, Any],
@@ -371,6 +401,7 @@ def _log_detection_data_preview(
         sample_name=sample_name,
         root_path="dataset/detection3d",
     )
+    _log_camera_preview(session, raw_info)
 
 
 def _log_segmentation_preview(
@@ -426,6 +457,53 @@ def _log_detection_preview(
         class_names=_resolve_class_names(config, batch, raw_info),
         sample_name=sample_name,
     )
+    _log_camera_preview(session, raw_info)
+
+
+def _log_multitask_preview(
+    session: VisualizationSession,
+    batch: dict[str, Any],
+    predictions: Any,
+    sample_name: str,
+    config: VisualizationPreviewConfig,
+    raw_info: dict[str, Any] | None,
+    mode: PreviewMode,
+) -> None:
+    """Render both branches of a combined detection/segmentation sample."""
+    class_names = _resolve_class_names(config, batch, raw_info)
+    if mode == "data":
+        _log_segmentation_data_preview(session, batch, sample_name, config, raw_info)
+        _log_detection_data_preview(session, batch, sample_name, config, raw_info)
+        return
+    if not isinstance(predictions, dict):
+        raise ValueError("Multi-task predictions must be a decoded dictionary.")
+    detection_predictions = predictions.get("predictions")
+    if not isinstance(detection_predictions, (list, tuple)) or len(detection_predictions) != 1:
+        raise ValueError("Multi-task detection predictions must contain exactly one sample.")
+    segmentation_labels = predictions.get("seg_pred_labels")
+    segmentation_points = predictions.get("seg_coord")
+    if segmentation_labels is None or segmentation_points is None:
+        raise ValueError("Multi-task predictions are missing segmentation outputs.")
+
+    session.log_segmentation3d(
+        segmentation_points,
+        segmentation_labels,
+        gt_labels=predictions.get("seg_target_labels"),
+        class_names=class_names,
+        point_labels=config.point_labels,
+        sample_name=sample_name,
+        root_path="segmentation3d",
+    )
+    session.log_detection3d(
+        detection_predictions[0],
+        points=_unwrap_single_item(batch.get("points")),
+        gt_boxes=_unwrap_single_item(batch.get("gt_boxes")),
+        gt_labels=_unwrap_single_item(batch.get("gt_labels")),
+        class_names=class_names,
+        sample_name=sample_name,
+        root_path="detection3d",
+    )
+    _log_camera_preview(session, raw_info)
 
 
 def _extract_single_detection_prediction(predictions: Any) -> dict[str, Any] | None:

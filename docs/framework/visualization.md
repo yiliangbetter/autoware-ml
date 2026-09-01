@@ -157,6 +157,15 @@ PTv3 pipelines drop raw points during grid sampling, so their samples are
 matched and rendered through `coord`, with `coord[inverse]` restoring
 point-level positions that align with `origin_segment` labels.
 
+### Combined Detection and Segmentation
+
+The existing `multi/ptv3` configurations are supported by the preview pipeline.
+A combined sample is logged as two sibling branches, `detection3d` and
+`segmentation3d`, so predicted and ground-truth boxes and point labels can be
+inspected together. Prediction previews reuse the model's existing evaluation
+output conversion to decode both branches; no visualization code is added to the
+model.
+
 ### Detection 3D
 
 The detection adapter can log:
