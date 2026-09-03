@@ -16,6 +16,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
@@ -27,7 +28,12 @@ from autoware_ml.datamodule.base import DataModule
 from autoware_ml.models.base import BaseModel
 from autoware_ml.visualization.common import as_numpy
 from autoware_ml.visualization.contracts import VisualizationSessionConfig
+from autoware_ml.visualization.detection3d import DETECTION_PREDICTION_KEY_SETS
 from autoware_ml.visualization.session import VisualizationSession
+
+#: Per-point ground-truth label keys, most detailed first. Shared by the task
+#: matcher and the label lookup so both stay in sync.
+SEGMENTATION_LABEL_KEYS: tuple[str, ...] = ("origin_segment", "segment", "pts_semantic_mask")
 
 PreviewSplit = Literal["train", "val", "test", "predict"]
 PreviewMode = Literal["auto", "predictions", "data"]
@@ -44,6 +50,7 @@ class VisualizationPreviewConfig:
     max_samples: int = 1
     device: str = "auto"
     point_labels: bool = False
+    class_names: tuple[str, ...] | None = None
     session: VisualizationSessionConfig = VisualizationSessionConfig()
 
 
@@ -102,7 +109,7 @@ def run_visualization_preview(
             _log_preview_sample(session, batch, predictions, dataset_index, mode, config, raw_info)
             visualized_count += 1
 
-    _wait_for_viewer(session.backend)
+    session.backend.wait_until_interrupted()
     return visualized_count
 
 
@@ -113,13 +120,6 @@ def _resolve_preview_mode(
     if mode == "auto":
         return "predictions" if model is not None else "data"
     return mode
-
-
-def _wait_for_viewer(backend: Any) -> None:
-    """Allow interactive backends to keep their viewer process alive."""
-    wait = getattr(backend, "wait_until_interrupted", None)
-    if wait is not None:
-        wait()
 
 
 def _build_preview_dataloader(
@@ -199,36 +199,82 @@ def _log_preview_sample(
         return
     if task == "detection3d":
         if mode == "data":
-            _log_detection_data_preview(session, batch, sample_name)
+            _log_detection_data_preview(session, batch, sample_name, config, raw_info)
             return
         detection_predictions = _extract_single_detection_prediction(predictions)
         if detection_predictions is None:
             raise ValueError("Could not normalize detection predictions for visualization.")
-        _log_detection_preview(session, batch, detection_predictions, sample_name)
+        _log_detection_preview(session, batch, detection_predictions, sample_name, config, raw_info)
         return
 
     raise ValueError(f"Unsupported visualization task: {task}")
 
 
 def _infer_preview_task(batch: dict[str, Any], predictions: Any) -> PreviewTask:
-    """Infer which task adapter should handle the preview sample."""
+    """Infer which task adapter should handle the preview sample.
+
+    Each task is matched on the full set of keys its adapter requires, so a
+    sample that satisfies more than one contract is reported as ambiguous
+    instead of being silently routed to whichever check happens to run first.
+    """
+    matches: list[PreviewTask] = []
     if "calibration_data" in batch:
-        return "calibration_status"
+        matches.append("calibration_status")
     if _has_segmentation_sample(batch) or _is_segmentation_predictions(predictions):
-        return "segmentation3d"
-    if (
-        _has_detection_sample(batch)
-        or _extract_single_detection_prediction(predictions) is not None
+        matches.append("segmentation3d")
+    if _has_detection_sample(batch) or _is_detection_predictions(predictions):
+        matches.append("detection3d")
+
+    if len(matches) == 1:
+        return matches[0]
+
+    observed_keys = ", ".join(sorted(batch)) or "<none>"
+    if not matches:
+        raise ValueError(
+            "Could not infer a visualization task from the current batch and predictions. "
+            f"Observed batch keys: {observed_keys}."
+        )
+    raise ValueError(
+        f"Ambiguous visualization task: sample matches {', '.join(matches)}. "
+        f"Observed batch keys: {observed_keys}."
+    )
+
+
+def _resolve_class_names(
+    config: VisualizationPreviewConfig,
+    batch: dict[str, Any],
+    raw_info: dict[str, Any] | None,
+) -> Sequence[str] | None:
+    """Resolve semantic class names for one preview sample.
+
+    Class names decide whether the viewer legend and per-instance labels read as
+    names or as bare integer ids, so they are looked up from every source that
+    can carry them. Split transform pipelines drop ``class_names`` before
+    collation, which leaves the batch empty for every task, so the raw dataset
+    info is consulted as well; segmentation pipelines carry them in neither and
+    depend on the configured value.
+    """
+    for candidate in (
+        config.class_names,
+        _unwrap_single_item(batch.get("class_names")),
+        (raw_info or {}).get("class_names"),
     ):
-        return "detection3d"
-    raise ValueError("Could not infer a visualization task from the current batch and predictions.")
+        if candidate is not None and len(candidate) > 0:
+            return candidate
+    return None
 
 
 def _has_segmentation_sample(batch: dict[str, Any]) -> bool:
-    """Return whether the batch follows the segmentation3d schema."""
-    return batch.get("points") is not None and (
-        batch.get("segment") is not None or batch.get("pts_semantic_mask") is not None
-    )
+    """Return whether the batch follows the segmentation3d schema.
+
+    PTv3 pipelines drop raw ``points`` during grid sampling and carry positions
+    in ``coord`` instead, so either key counts as a point source. Without this
+    the transformed-data preview could not route any PTv3 segmentation config,
+    because that path has no predictions to fall back on.
+    """
+    has_positions = batch.get("points") is not None or batch.get("coord") is not None
+    has_labels = any(batch.get(key) is not None for key in SEGMENTATION_LABEL_KEYS)
+    return has_positions and has_labels
 
 
 def _has_detection_sample(batch: dict[str, Any]) -> bool:
@@ -241,6 +287,14 @@ def _is_segmentation_predictions(predictions: Any) -> bool:
     return isinstance(predictions, dict) and "pred_labels" in predictions
 
 
+def _is_detection_predictions(predictions: Any) -> bool:
+    """Return whether prediction outputs carry a decoded 3D detection key set."""
+    candidate = _extract_single_detection_prediction(predictions)
+    if candidate is None:
+        return False
+    return any(key_set <= candidate.keys() for key_set in DETECTION_PREDICTION_KEY_SETS)
+
+
 def _log_calibration_preview(
     session: VisualizationSession,
     batch: dict[str, Any],
@@ -251,7 +305,7 @@ def _log_calibration_preview(
     """Render one calibration-status preview sample."""
     calibration_data = _unwrap_single_item(batch["calibration_data"])
     pred_status: int | None = None
-    root_path = "transformed/calibration_status" if mode == "data" else "calibration_status"
+    root_path = "dataset/calibration_status" if mode == "data" else "calibration_status"
     if mode == "predictions":
         pred_probs = as_numpy(predictions)
         pred_probs = pred_probs[0] if pred_probs.ndim > 1 else pred_probs
@@ -293,10 +347,10 @@ def _log_segmentation_data_preview(
     session.log_segmentation3d_data(
         _get_segmentation_points(batch, gt_labels),
         _unwrap_single_item(gt_labels),
-        class_names=_unwrap_single_item(batch.get("class_names")),
+        class_names=_resolve_class_names(config, batch, raw_info),
         point_labels=config.point_labels,
         sample_name=sample_name,
-        root_path="transformed/segmentation3d",
+        root_path="dataset/segmentation3d",
     )
     _log_camera_preview(session, raw_info)
 
@@ -305,15 +359,17 @@ def _log_detection_data_preview(
     session: VisualizationSession,
     batch: dict[str, Any],
     sample_name: str,
+    config: VisualizationPreviewConfig,
+    raw_info: dict[str, Any] | None = None,
 ) -> None:
     """Render one transformed detection sample without predictions."""
     session.log_detection3d_data(
         points=_unwrap_single_item(batch.get("points")),
         gt_boxes=_unwrap_single_item(batch.get("gt_boxes")),
         gt_labels=_unwrap_single_item(batch.get("gt_labels")),
-        class_names=_unwrap_single_item(batch.get("class_names")),
+        class_names=_resolve_class_names(config, batch, raw_info),
         sample_name=sample_name,
-        root_path="transformed/detection3d",
+        root_path="dataset/detection3d",
     )
 
 
@@ -333,7 +389,7 @@ def _log_segmentation_preview(
         pred_labels,
         pred_probs=predictions.get("pred_probs"),
         gt_labels=_unwrap_single_item(gt_labels),
-        class_names=_unwrap_single_item(batch.get("class_names")),
+        class_names=_resolve_class_names(config, batch, raw_info),
         point_labels=config.point_labels,
         sample_name=sample_name,
     )
@@ -358,6 +414,8 @@ def _log_detection_preview(
     batch: dict[str, Any],
     predictions: dict[str, Any],
     sample_name: str,
+    config: VisualizationPreviewConfig,
+    raw_info: dict[str, Any] | None = None,
 ) -> None:
     """Render one 3D detection preview sample."""
     session.log_detection3d(
@@ -365,7 +423,7 @@ def _log_detection_preview(
         points=_unwrap_single_item(batch.get("points")),
         gt_boxes=_unwrap_single_item(batch.get("gt_boxes")),
         gt_labels=_unwrap_single_item(batch.get("gt_labels")),
-        class_names=_unwrap_single_item(batch.get("class_names")),
+        class_names=_resolve_class_names(config, batch, raw_info),
         sample_name=sample_name,
     )
 
@@ -398,7 +456,7 @@ def _unwrap_single_item(value: Any) -> Any:
 
 def _get_segmentation_gt_labels(batch: dict[str, Any]) -> Any:
     """Return the most detailed segmentation ground-truth labels available."""
-    for key in ("origin_segment", "segment", "pts_semantic_mask"):
+    for key in SEGMENTATION_LABEL_KEYS:
         labels = batch.get(key)
         if labels is not None:
             return labels

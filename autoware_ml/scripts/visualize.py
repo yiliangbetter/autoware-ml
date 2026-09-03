@@ -18,12 +18,13 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
+from typing import Any
 
 import hydra
 import lightning as L
 from omegaconf import DictConfig
 
-from autoware_ml.utils.checkpoints import load_model_from_checkpoint
+from autoware_ml.utils.checkpoints import apply_matching_weights
 from autoware_ml.utils.runtime import (
     configure_torch_runtime,
     get_config_path,
@@ -41,6 +42,31 @@ logger = logging.getLogger(__name__)
 _CONFIG_PATH = get_config_path()
 
 
+def _resolve_class_names(cfg: DictConfig, visualization_cfg: Any) -> tuple[str, ...] | None:
+    """Resolve semantic class names for the viewer legend and instance labels.
+
+    An explicit ``visualization.class_names`` always wins. Otherwise the task
+    dataset config is consulted, because segmentation samples carry no class
+    names at runtime and would otherwise render every legend entry and point
+    label as a bare integer id.
+    """
+    explicit = visualization_cfg.get("class_names", None)
+    if explicit:
+        return tuple(str(name) for name in explicit)
+
+    dataset_cfg = cfg.get("dataset", None)
+    if dataset_cfg is None:
+        return None
+    for task in ("segmentation3d", "detection3d"):
+        task_cfg = dataset_cfg.get(task, None)
+        if task_cfg is None:
+            continue
+        class_names = task_cfg.get("class_names", None)
+        if class_names:
+            return tuple(str(name) for name in class_names)
+    return None
+
+
 def _build_preview_config(cfg: DictConfig) -> VisualizationPreviewConfig:
     """Normalize optional visualization config values."""
     visualization_cfg = cfg.get("visualization", {})
@@ -51,6 +77,7 @@ def _build_preview_config(cfg: DictConfig) -> VisualizationPreviewConfig:
         max_samples=int(visualization_cfg.get("max_samples", 1)),
         device=str(visualization_cfg.get("device", "auto")),
         point_labels=bool(visualization_cfg.get("point_labels", False)),
+        class_names=_resolve_class_names(cfg, visualization_cfg),
         session=VisualizationSessionConfig(
             backend=str(visualization_cfg.get("backend", "rerun")),
             application_id=str(visualization_cfg.get("application_id", "autoware-ml")),
@@ -86,12 +113,13 @@ def main(cfg: DictConfig) -> None:
         model.set_data_preprocessing(hydra.utils.instantiate(cfg.data_preprocessing))
 
         logger.info("Loading checkpoint: %s", checkpoint_path)
-        load_model_from_checkpoint(
+        apply_matching_weights(
             model,
             Path(checkpoint_path),
             map_location=device,
             device=device,
             set_eval=True,
+            logger=logger,
         )
     if preview_config.mode == "predictions" and checkpoint_path is None:
         raise ValueError("Checkpoint path must be provided for prediction visualization.")

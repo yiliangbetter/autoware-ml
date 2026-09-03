@@ -80,7 +80,45 @@ This is the isolation boundary between task code and any concrete backend.
 It converts the neutral events into `rerun.Image`, `rerun.Points3D`,
 `rerun.Boxes3D`, `rerun.Transform3D`, and related entities.
 
-There is also a `NoOpVisualizationBackend` for disabled or test-only paths.
+There is also a `NoOpVisualizationBackend` for disabled or test-only paths. The
+Rerun backend is imported lazily, so the `noop` backend and the smoke tests
+built on it stay usable without the Rerun SDK installed.
+
+### Dependency compatibility
+
+`rerun-sdk` 0.23.1 declares `numpy>=1.23`, but its generated `__array__`
+implementations forward a `copy` argument that only NumPy 2.0 and later accept.
+Under the pinned `numpy==1.26.4` this makes every `AnnotationContext` serialize
+to an empty list, and because Rerun reports the failure as a warning rather than
+an exception, class legends disappear from the viewer while the recording still
+looks healthy.
+
+`rerun_backend.py` therefore patches `rerun.datatypes.ClassId.__array__` to drop
+the keyword when it is `None`, which restores NumPy 1.x support and leaves
+NumPy 2.x behaviour untouched. Backend startup then logs a probe legend and
+raises if it still serializes empty, so an incompatible dependency bump fails
+loudly instead of quietly dropping every legend. Remove the patch once the
+repository moves to NumPy 2.x or a Rerun release that fixes the conversion.
+
+### Class name resolution
+
+Legends and per-instance labels read as class names rather than integer ids only
+when class names reach the adapters, and they are looked up from three sources in
+order:
+
+1. an explicit `visualization.class_names` override
+2. the collated batch's `class_names` key
+3. the raw dataset info returned by `dataset.get_data_info(...)`
+
+The batch is checked but rarely carries anything: split transform pipelines drop
+`class_names` before collation for every task, so detection recovers names from
+the raw dataset info and segmentation depends on the configured value. Each task
+dataset config therefore exposes a top-level `class_names`, which the metric
+suites reference as well so the viewer and the metrics cannot disagree.
+
+When no source carries them, `format_class_label` falls back to the stringified
+class id, so an unnamed legend means the resolution chain came up empty rather
+than that the recording is broken.
 
 ## Task Coverage
 
@@ -113,6 +151,11 @@ The segmentation adapter can log:
 
 This matches the current segmentation prediction contract, which already
 returns `pred_labels` and `pred_probs`.
+
+Point positions are read from `points` when present, and from `coord` otherwise.
+PTv3 pipelines drop raw points during grid sampling, so their samples are
+matched and rendered through `coord`, with `coord[inverse]` restoring
+point-level positions that align with `origin_segment` labels.
 
 ### Detection 3D
 

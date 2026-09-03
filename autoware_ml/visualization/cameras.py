@@ -20,7 +20,6 @@ can project 3D points onto camera images on hover.
 
 from __future__ import annotations
 
-import logging
 from typing import Any
 
 import cv2
@@ -33,8 +32,6 @@ from autoware_ml.visualization.events import (
     Transform3DEvent,
     VisualizationEvent,
 )
-
-logger = logging.getLogger(__name__)
 
 
 def build_camera_events(
@@ -58,28 +55,32 @@ def build_camera_events(
     Returns:
         List of ``Transform3DEvent``, ``PinholeEvent``, and ``ImageEvent``
         objects, one triplet per camera.
+
+    Raises:
+        ValueError: If a camera entry is missing calibration keys.
+        FileNotFoundError: If a camera image cannot be read from disk.
     """
     events: list[VisualizationEvent] = []
     for cam_name, cam_info in images.items():
-        cam_path = f"{root_path}/{cam_name}"
-        try:
-            events.extend(_build_single_camera_events(cam_info, cam_path))
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("Skipping camera %r: %s", cam_name, exc)
+        events.extend(_build_single_camera_events(cam_info, f"{root_path}/{cam_name}", cam_name))
     return events
 
 
 def _build_single_camera_events(
     cam_info: dict[str, Any],
     cam_path: str,
+    cam_name: str,
 ) -> list[VisualizationEvent]:
     """Build the three visualization events for one camera."""
-    img_path = cam_info.get("img_path")
-    cam2img = cam_info.get("cam2img")
-    lidar2cam = cam_info.get("lidar2cam")
+    missing = [key for key in ("img_path", "cam2img", "lidar2cam") if cam_info.get(key) is None]
+    if missing:
+        raise ValueError(
+            f"Camera {cam_name!r} is missing required calibration keys: {', '.join(missing)}."
+        )
 
-    if img_path is None or cam2img is None or lidar2cam is None:
-        raise ValueError("missing img_path, cam2img, or lidar2cam")
+    img_path = cam_info["img_path"]
+    cam2img = cam_info["cam2img"]
+    lidar2cam = cam_info["lidar2cam"]
 
     image_array = _load_image(str(img_path))
     height, width = image_array.shape[:2]
