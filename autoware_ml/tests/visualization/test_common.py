@@ -26,6 +26,7 @@ from autoware_ml.visualization.common import (
     ensure_image_uint8,
     ensure_xyz,
     format_class_label,
+    point_cloud_colors,
     resolve_palette_size,
 )
 
@@ -57,12 +58,18 @@ def test_resolve_palette_size_takes_the_maximum_across_arrays() -> None:
 
 
 def test_build_class_annotation_context_labels_every_palette_entry() -> None:
-    context = build_class_annotation_context("root", build_label_palette(3), ["road", "car"])
+    context = build_class_annotation_context(
+        "root", build_label_palette(3), ["road", "car"]
+    )
 
     assert context is not None
     assert context.path == "root"
     assert [annotation.id for annotation in context.annotations] == [0, 1, 2]
-    assert [annotation.label for annotation in context.annotations] == ["road", "car", "2"]
+    assert [annotation.label for annotation in context.annotations] == [
+        "road",
+        "car",
+        "2",
+    ]
     assert all(len(annotation.color) == 4 for annotation in context.annotations)
 
 
@@ -78,7 +85,9 @@ def test_format_class_label_appends_score_when_present() -> None:
 
 def test_build_sample_metadata_events_is_empty_without_a_name() -> None:
     assert build_sample_metadata_events("root", None) == []
-    assert build_sample_metadata_events("root", "sample-1")[0].path == "root/meta/sample"
+    assert (
+        build_sample_metadata_events("root", "sample-1")[0].path == "root/meta/sample"
+    )
 
 
 def test_ensure_xyz_rejects_non_point_shapes() -> None:
@@ -95,3 +104,18 @@ def test_ensure_image_uint8_scales_float_images() -> None:
     image = ensure_image_uint8(np.ones((8, 8, 3), dtype=np.float32))
     assert image.dtype == np.uint8
     assert int(image.max()) == 255
+
+
+def test_point_cloud_colors_can_render_intensity() -> None:
+    colors = point_cloud_colors(
+        np.array([[0.0, 0.0, 0.0, 2.0], [1.0, 0.0, 0.0, 8.0]], dtype=np.float32),
+        "intensity",
+    )
+    assert colors is not None
+    assert colors.shape == (2, 4)
+    assert tuple(colors[0]) != tuple(colors[1])
+
+
+def test_point_cloud_colors_requires_intensity_column() -> None:
+    with pytest.raises(ValueError, match="intensity column"):
+        point_cloud_colors(np.zeros((1, 3), dtype=np.float32), "intensity")

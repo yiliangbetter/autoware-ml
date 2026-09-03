@@ -22,6 +22,7 @@ from typing import Any
 import numpy as np
 import torch
 
+from autoware_ml.visualization.colors import scalar_to_heatmap_colors
 from autoware_ml.visualization.events import (
     AnnotationContextEvent,
     AnnotationInfo,
@@ -49,6 +50,33 @@ def ensure_xyz(points: Any) -> np.ndarray:
     if array.ndim != 2 or array.shape[1] < 3:
         raise ValueError(f"points must have shape (N, >=3), got {array.shape}")
     return array[:, :3]
+
+
+def point_cloud_colors(points: Any, mode: str = "semantic") -> np.ndarray | None:
+    """Build optional RGBA point colors, including per-frame LiDAR intensity."""
+    if mode not in {"semantic", "intensity", "solid"}:
+        raise ValueError("point color mode must be 'semantic', 'intensity', or 'solid'")
+    if mode == "semantic":
+        return None
+    array = as_numpy(points, np.float32)
+    if array.ndim != 2 or array.shape[1] < 3:
+        raise ValueError(f"points must have shape (N, >=3), got {array.shape}")
+    if mode == "solid":
+        colors = np.empty((array.shape[0], 4), dtype=np.uint8)
+        colors[:] = (220, 230, 240, 255)
+        return colors
+    if array.shape[1] < 4:
+        raise ValueError("intensity coloring requires points with an intensity column")
+    intensity = np.nan_to_num(array[:, 3], nan=0.0, posinf=0.0, neginf=0.0)
+    low, high = (
+        (float(intensity.min()), float(intensity.max()))
+        if intensity.size
+        else (0.0, 0.0)
+    )
+    normalized = np.zeros_like(intensity, dtype=np.float32)
+    if high > low:
+        normalized = (intensity - low) / (high - low)
+    return scalar_to_heatmap_colors(normalized)
 
 
 def ensure_image_uint8(image: Any) -> np.ndarray:

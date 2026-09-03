@@ -22,7 +22,9 @@ import pytest
 from autoware_ml.visualization.detection3d import (
     build_detection3d_data_events,
     build_detection3d_events,
+    detection_iou_statistics,
     normalize_detection_predictions,
+    oriented_box_iou_3d,
 )
 from autoware_ml.visualization.events import (
     AnnotationContextEvent,
@@ -104,10 +106,28 @@ def test_build_detection3d_events_logs_frame_metrics() -> None:
         gt_labels=np.array([1], dtype=np.int64),
     )
 
-    metrics = {event.path: event.value for event in events if isinstance(event, ScalarEvent)}
+    metrics = {
+        event.path: event.value for event in events if isinstance(event, ScalarEvent)
+    }
     assert metrics["detection3d/metrics/num_predictions"] == 1.0
     assert metrics["detection3d/metrics/num_ground_truth"] == 1.0
     assert metrics["detection3d/metrics/mean_score"] == pytest.approx(0.9)
+    assert metrics["detection3d/metrics/true_positives"] == 1.0
+    assert metrics["detection3d/metrics/mean_matched_iou"] == pytest.approx(1.0)
+
+
+def test_detection_iou_matches_same_class_boxes_only() -> None:
+    shifted = _ONE_BOX.copy()
+    shifted[0, 0] += 20.0
+    assert oriented_box_iou_3d(_ONE_BOX[0], _ONE_BOX[0]) == pytest.approx(1.0)
+    stats = detection_iou_statistics(
+        np.vstack([_ONE_BOX, shifted]),
+        np.array([0, 1]),
+        _ONE_BOX,
+        np.array([1]),
+    )
+    assert stats["true_positives"] == 0.0
+    assert stats["false_positives"] == 2.0
 
 
 def test_build_detection3d_events_legend_covers_every_declared_class() -> None:
@@ -121,7 +141,9 @@ def test_build_detection3d_events_legend_covers_every_declared_class() -> None:
         class_names=["pedestrian", "car", "truck"],
     )
 
-    context = next(event for event in events if isinstance(event, AnnotationContextEvent))
+    context = next(
+        event for event in events if isinstance(event, AnnotationContextEvent)
+    )
     assert [annotation.label for annotation in context.annotations] == [
         "pedestrian",
         "car",

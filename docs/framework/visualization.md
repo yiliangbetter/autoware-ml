@@ -57,6 +57,8 @@ These adapters understand task semantics, for example:
 - calibration camera intrinsics and lidar-to-camera transforms
 - segmentation point labels and confidences
 - detection decoded 3D boxes and class scores
+- LiDAR point-cloud intensity and semantic point coloring
+- pointwise prediction logits for uncertainty visualization
 
 ### 3. Visualization Events
 
@@ -148,6 +150,9 @@ The segmentation adapter can log:
 - optional ground-truth labels
 - sample metadata and point counts
 - optional mean confidence from `pred_probs`
+- pointwise normalized entropy computed from `pred_logits` (softmax followed by
+  `-sum(p * log(p)) / log(num_classes)`)
+- selectable point coloring: semantic labels, LiDAR intensity, or a solid color
 
 This matches the current segmentation prediction contract, which already
 returns `pred_labels` and `pred_probs`.
@@ -176,6 +181,34 @@ The detection adapter can log:
 - optional ground-truth boxes
 - class-colored boxes with class/score labels
 - sample metadata and prediction/ground-truth counts
+- the same point-cloud color modes, including LiDAR intensity from column 4
+- same-class, yaw-aware 3D IoU matching at threshold 0.5, with per-frame
+  true-positive, false-positive, false-negative, precision, recall, and mean
+  matched-IoU scalars
+
+Detection and segmentation use sibling `prediction` and `ground_truth` scene
+entities. A frame with no detection annotations remains a segmentation-only
+preview; no synthetic detection objects are created.
+
+### Camera and timing behavior
+
+Each available camera is logged as a transform, pinhole calibration, and image.
+The Rerun blueprint places the camera frustums in the same 3D scene as the
+LiDAR points and boxes, enabling live 3D camera views and projection inspection.
+The scene origin is the detection or segmentation entity rather than the Rerun
+root, so empty `/` Viewport and Streams entries are not created.
+Camera overlays are pointwise LiDAR segmentation only; camera/pixel
+segmentation is outside this scope.
+
+Preview samples are logged at their native timeline steps. If prediction frames
+arrive more frequently than ground truth, intermediate frames show prediction
+and point-cloud data only; ground truth is omitted until a ground-truth frame is
+available. Each frame replaces the previous point-cloud entity at its timeline
+step, so prediction multi-sweep streams do not accumulate stale points.
+
+The preview setting `VisualizationPreviewConfig.point_color_mode` accepts
+`semantic` (default), `intensity`, or `solid`. For `intensity`, the fourth point
+feature is normalized per frame and rendered with the shared scalar heatmap.
 
 It normalizes both existing decoded output styles:
 
