@@ -252,6 +252,7 @@ class PTv3SegDetModel(PTv3BaseModel):
         ]
         eval_out = detection_eval_output(predictions, batch)
         eval_out.update(segmentation_eval_output(outputs["seg_logits"], batch))
+        eval_out["seg_pred_logits"] = outputs["seg_logits"][batch["inverse"].long()]
         return eval_out
 
     def get_export_output_names(self) -> list[str]:

@@ -232,6 +232,7 @@ def segmentation_eval_output(
     """
     return {
         "seg_pred_labels": seg_logits.argmax(dim=1)[batch["inverse"].long()],
+        "seg_pred_logits": seg_logits[batch["inverse"].long()],
         "seg_target_labels": batch["origin_segment"].long(),
         "seg_coord": batch["origin_coord"],
     }
@@ -252,4 +253,8 @@ def segmentation_predict_outputs(
         original-point level.
     """
     point_probs = torch.softmax(seg_logits, dim=1)[batch["inverse"].long()]
-    return {"pred_labels": point_probs.argmax(dim=1), "pred_probs": point_probs}
+    return {
+        "pred_labels": point_probs.argmax(dim=1),
+        "pred_probs": point_probs,
+        "pred_logits": seg_logits[batch["inverse"].long()],
+    }

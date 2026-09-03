@@ -111,7 +111,9 @@ def _yaw_to_quaternions(yaws: np.ndarray) -> np.ndarray:
 class _RerunVisualizationBackendBase:
     """Shared Rerun event translation."""
 
-    def _initialize_recording(self, config: VisualizationSessionConfig, *, spawn: bool) -> None:
+    def _initialize_recording(
+        self, config: VisualizationSessionConfig, *, spawn: bool
+    ) -> None:
         """Initialize one Rerun recording."""
         self.timeline = config.timeline
         self.rr = _load_rerun_module()
@@ -123,6 +125,8 @@ class _RerunVisualizationBackendBase:
             spawn=spawn,
         )
         self._fused_blueprint_sent = False
+        self._camera_blueprint_sent = False
+        self._scene_contents: set[str] = set()
 
     def wait_until_interrupted(self) -> None:
         """Return immediately because no viewer is served by default."""
@@ -253,13 +257,17 @@ class _RerunVisualizationBackendBase:
         self.rr.send_blueprint(
             self.rr.blueprint.Blueprint(
                 self.rr.blueprint.Horizontal(
-                    *([
-                        self.rr.blueprint.Spatial2DView(
-                            name="Raw camera",
-                            origin=raw_path,
-                            contents=[raw_path, f"{raw_path}/projected_points"],
-                        )
-                    ] if raw_path else []),
+                    *(
+                        [
+                            self.rr.blueprint.Spatial2DView(
+                                name="Raw camera",
+                                origin=raw_path,
+                                contents=[raw_path, f"{raw_path}/projected_points"],
+                            )
+                        ]
+                        if raw_path
+                        else []
+                    ),
                     self.rr.blueprint.Spatial2DView(
                         name="Fused camera",
                         origin=fused_path,
@@ -275,10 +283,41 @@ class _RerunVisualizationBackendBase:
         )
         self._fused_blueprint_sent = True
 
+    def _send_camera_blueprint_if_needed(
+        self, events: list[VisualizationEvent]
+    ) -> None:
+        """Create one 3D scene containing LiDAR, boxes, and camera frustums."""
+        if self._camera_blueprint_sent or not any(
+            isinstance(event, PinholeEvent) for event in events
+        ):
+            return
+        contents = sorted(self._scene_contents)
+        scene_origin = next(
+            (path for path in ("detection3d", "segmentation3d") if path in contents),
+            contents[0],
+        )
+        self.rr.send_blueprint(
+            self.rr.blueprint.Blueprint(
+                self.rr.blueprint.Spatial3DView(
+                    name="3D scene",
+                    origin=scene_origin,
+                    contents=contents,
+                ),
+                auto_views=False,
+            )
+        )
+        self._camera_blueprint_sent = True
+
     def log_events(self, events: Iterable[VisualizationEvent]) -> None:
         """Log multiple visualization events."""
         event_list = list(events)
+        for event in event_list:
+            if isinstance(event, PinholeEvent):
+                self._scene_contents.add(event.path)
+            elif isinstance(event, (PointCloud3DEvent, Boxes3DEvent)):
+                self._scene_contents.add(event.path.rsplit("/", 1)[0])
         self._send_fused_blueprint_if_needed(event_list)
+        self._send_camera_blueprint_if_needed(event_list)
         for event in event_list:
             self.log_event(event)
 

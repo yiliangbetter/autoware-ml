@@ -42,7 +42,9 @@ logger = logging.getLogger(__name__)
 _CONFIG_PATH = get_config_path()
 
 
-def _resolve_class_names(cfg: DictConfig, visualization_cfg: Any) -> tuple[str, ...] | None:
+def _resolve_class_names(
+    cfg: DictConfig, visualization_cfg: Any
+) -> tuple[str, ...] | None:
     """Resolve semantic class names for the viewer legend and instance labels.
 
     An explicit ``visualization.class_names`` always wins. Otherwise the task
@@ -77,6 +79,7 @@ def _build_preview_config(cfg: DictConfig) -> VisualizationPreviewConfig:
         max_samples=int(visualization_cfg.get("max_samples", 1)),
         device=str(visualization_cfg.get("device", "auto")),
         point_labels=bool(visualization_cfg.get("point_labels", False)),
+        point_color_mode=str(visualization_cfg.get("point_color_mode", "semantic")),
         class_names=_resolve_class_names(cfg, visualization_cfg),
         session=VisualizationSessionConfig(
             backend=str(visualization_cfg.get("backend", "rerun")),
@@ -85,7 +88,9 @@ def _build_preview_config(cfg: DictConfig) -> VisualizationPreviewConfig:
             web_port=int(visualization_cfg.get("web_port", 9090)),
             grpc_port=int(visualization_cfg.get("grpc_port", 9876)),
             wait=bool(visualization_cfg.get("wait", True)),
-            server_memory_limit=str(visualization_cfg.get("server_memory_limit", "25%")),
+            server_memory_limit=str(
+                visualization_cfg.get("server_memory_limit", "25%")
+            ),
             timeline=str(visualization_cfg.get("timeline", "frame")),
         ),
     )
@@ -122,7 +127,9 @@ def main(cfg: DictConfig) -> None:
             logger=logger,
         )
     if preview_config.mode == "predictions" and checkpoint_path is None:
-        raise ValueError("Checkpoint path must be provided for prediction visualization.")
+        raise ValueError(
+            "Checkpoint path must be provided for prediction visualization."
+        )
     if preview_config.mode not in {"auto", "predictions", "data"}:
         raise ValueError(f"Unknown visualization mode: {preview_config.mode}")
 
@@ -135,7 +142,9 @@ def main(cfg: DictConfig) -> None:
 
     if effective_mode == "predictions" and model is None:
         if checkpoint_path is None:
-            raise ValueError("Checkpoint path must be provided for prediction visualization.")
+            raise ValueError(
+                "Checkpoint path must be provided for prediction visualization."
+            )
         raise RuntimeError("Prediction visualization requires an instantiated model.")
 
     logger.info(

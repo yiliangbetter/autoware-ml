@@ -23,7 +23,10 @@ from autoware_ml.utils.calibration import CalibrationData
 from autoware_ml.visualization.backends import create_visualization_backend
 from autoware_ml.visualization.calibration_status import build_calibration_status_events
 from autoware_ml.visualization.cameras import build_camera_events
-from autoware_ml.visualization.contracts import VisualizationBackend, VisualizationSessionConfig
+from autoware_ml.visualization.contracts import (
+    VisualizationBackend,
+    VisualizationSessionConfig,
+)
 from autoware_ml.visualization.detection3d import (
     build_detection3d_data_events,
     build_detection3d_events,
@@ -91,6 +94,8 @@ class VisualizationSession:
         point_radius: float = 0.04,
         point_labels: bool = False,
         sample_name: str | None = None,
+        point_color_mode: str = "semantic",
+        pred_logits: Any | None = None,
     ) -> None:
         """Log one 3D segmentation sample."""
         self.backend.log_events(
@@ -105,6 +110,8 @@ class VisualizationSession:
                 point_radius=point_radius,
                 point_labels=point_labels,
                 sample_name=sample_name,
+                point_color_mode=point_color_mode,
+                pred_logits=pred_logits,
             )
         )
 
@@ -119,6 +126,7 @@ class VisualizationSession:
         point_radius: float = 0.04,
         point_labels: bool = False,
         sample_name: str | None = None,
+        point_color_mode: str = "semantic",
     ) -> None:
         """Log one transformed 3D segmentation sample without predictions."""
         self.backend.log_events(
@@ -131,6 +139,7 @@ class VisualizationSession:
                 point_radius=point_radius,
                 point_labels=point_labels,
                 sample_name=sample_name,
+                point_color_mode=point_color_mode,
             )
         )
 
@@ -145,6 +154,7 @@ class VisualizationSession:
         root_path: str = "detection3d",
         point_radius: float = 0.04,
         sample_name: str | None = None,
+        point_color_mode: str = "semantic",
     ) -> None:
         """Log one 3D detection sample."""
         self.backend.log_events(
@@ -157,6 +167,7 @@ class VisualizationSession:
                 root_path=root_path,
                 point_radius=point_radius,
                 sample_name=sample_name,
+                point_color_mode=point_color_mode,
             )
         )
 
@@ -179,6 +190,7 @@ class VisualizationSession:
         root_path: str = "detection3d",
         point_radius: float = 0.04,
         sample_name: str | None = None,
+        point_color_mode: str = "semantic",
     ) -> None:
         """Log one transformed 3D detection sample without predictions."""
         self.backend.log_events(
@@ -190,5 +202,6 @@ class VisualizationSession:
                 root_path=root_path,
                 point_radius=point_radius,
                 sample_name=sample_name,
+                point_color_mode=point_color_mode,
             )
         )

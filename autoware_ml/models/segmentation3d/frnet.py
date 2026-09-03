@@ -229,6 +229,7 @@ class FRNet(BaseModel):
         point_logits = outputs[0]
         return {
             "seg_pred_labels": point_logits.argmax(dim=1),
+            "seg_pred_logits": point_logits,
             "seg_target_labels": batch["pts_semantic_mask"],
             "seg_coord": batch["points"][:, :3],
         }
@@ -256,7 +257,11 @@ class FRNet(BaseModel):
         del batch_inputs_dict
         point_logits = outputs[0]
         pred_probs = torch.softmax(point_logits, dim=1)
-        return {"pred_labels": pred_probs.argmax(dim=1), "pred_probs": pred_probs}
+        return {
+            "pred_labels": pred_probs.argmax(dim=1),
+            "pred_probs": pred_probs,
+            "pred_logits": point_logits,
+        }
 
     def get_export_output_names(self) -> list[str]:
         """Return ordered FRNet export output names."""
