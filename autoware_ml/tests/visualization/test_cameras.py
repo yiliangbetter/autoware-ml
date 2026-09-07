@@ -96,9 +96,7 @@ def test_build_camera_events_splits_the_extrinsic_into_rotation_and_translation(
 
 
 def test_build_camera_events_honors_the_root_path(camera_image: Path) -> None:
-    events = build_camera_events(
-        {"CAM_FRONT": _camera_entry(camera_image)}, root_path="multiview"
-    )
+    events = build_camera_events({"CAM_FRONT": _camera_entry(camera_image)}, root_path="multiview")
 
     assert all(event.path == "multiview/CAM_FRONT" for event in events)
 
