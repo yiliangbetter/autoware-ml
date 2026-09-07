@@ -142,14 +142,16 @@ Preview one or more samples through the isolated visualization backend.
 ```bash
 autoware-ml visualize \
     --config-name <config_path> \
-    [--checkpoint <path>] \
+    [--weights <path>] \
     [--mode auto|predictions|data] \
     [--split test|predict|val|train] \
     [--sample-index N] \
     [--max-samples N] \
+    [--prediction-frequency-hz HZ] \
     [--backend rerun|noop] \
     [--device cpu|cuda|auto] \
     [--point-labels/--no-point-labels] \
+    [--point-color-mode semantic|intensity|solid] \
     [--web-port PORT] \
     [--grpc-port PORT] \
     [--wait/--no-wait]
@@ -158,17 +160,19 @@ autoware-ml visualize \
 **Arguments:**
 
 - `--config-name`: Path to config (same as used for training)
-- `--checkpoint`: Optional path to a `.ckpt` checkpoint file
+- `--weights`: Optional path to a `.ckpt` checkpoint file
 
 **Common options:**
 
-- `--mode`: Preview mode. `auto` uses predictions when a checkpoint is given and transformed data otherwise (default: `auto`)
-- `--split`: Dataset split whose transforms and collation should be previewed; when a checkpoint is provided, the model-owned preprocessing and prediction path is used (default: `test`)
+- `--mode`: Preview mode. `auto` uses predictions when weights are given and transformed data otherwise (default: `auto`)
+- `--split`: Dataset split whose transforms and collation should be previewed; when weights are provided, the model-owned preprocessing and prediction path is used (default: `test`)
 - `--sample-index`: First sample index to preview (default: `0`)
-- `--max-samples`: Number of consecutive samples to preview (default: `1`)
+- `--max-samples`: Number of consecutive dataset keyframes to use as preview anchors (default: `1`)
+- `--prediction-frequency-hz`: Prediction frequency used to resolve unlabeled source frames between annotated keyframes when the dataset supports them (default: `10`)
 - `--backend`: Visualization backend (default: `rerun`)
 - `--device`: Execution device for preview inference (default: `auto`, which uses CUDA when available)
 - `--point-labels` / `--no-point-labels`: Log per-point text labels. Disabled by default because large semantic point clouds become slow when every point has text.
+- `--point-color-mode`: Initially active point-cloud tab: semantic class, normalized LiDAR intensity, or solid geometry color (default: `semantic`). All available modes remain selectable in Rerun.
 - `--web-port`: Rerun web viewer HTTP port (default: `9090`)
 - `--grpc-port`: Rerun SDK gRPC port used by the web viewer proxy (default: `9876`)
 - `--wait` / `--no-wait`: Keep the Rerun web server alive after logging (default: `--wait`)
@@ -179,21 +183,23 @@ Backend modes:
 - `rerun`: serves the Rerun web viewer and logs the browser URL. Forward both `--web-port` and `--grpc-port` when running in Docker.
 - `noop`: runs the preview path and drops all visualization events. Use this for smoke tests and CI.
 
-When `--max-samples` is greater than `1`, Rerun logs every sample on the same
-timeline, so the viewer's bottom scrubber can move between them.
+Rerun logs every rendered frame on the same timeline. For T4 multi-task data,
+one 1 Hz GT anchor can additionally produce nine prediction-only frames at the
+default 10 Hz setting. Those frames use only their current LiDAR sweep and do
+not interpolate or retain GT.
 
 **Example:**
 
 ```bash
 autoware-ml visualize \
     --config-name detection3d/centerpoint/voxel020_second_secfpn_51m_nuscenes \
-    --checkpoint mlruns/detection3d/centerpoint/voxel020_second_secfpn_51m_nuscenes/<run_id>/artifacts/checkpoints/best.ckpt \
+    --weights mlruns/detection3d/centerpoint/voxel020_second_secfpn_51m_nuscenes/<run_id>/artifacts/checkpoints/best.ckpt \
     --split test \
     --sample-index 0 \
     --backend rerun
 ```
 
-Preview transformed data only, without a checkpoint:
+Preview transformed data only, without weights:
 
 ```bash
 autoware-ml visualize \
@@ -208,8 +214,9 @@ autoware-ml visualize \
 Current visualization coverage:
 
 - calibration status: camera image, projected lidar overlay, fused image, status labels, and confidence summary
-- segmentation3d: class-colored point clouds with legends, optional ground truth, and confidence metrics
-- detection3d: class-labeled 3D boxes with legends, optional ground truth, and point-cloud context
+- segmentation3d: GT/PD point clouds, semantic/intensity/solid coloring, and pointwise entropy computed from prediction logits
+- detection3d: GT/PD boxes overlaid on point clouds with same-class, yaw-aware 3D IoU statistics
+- multi-task PTv3: combined segmentation and detection comparisons, calibrated live 3D camera frustums, and 10 Hz prediction-only intermediate frames between 1 Hz GT anchors
 
 ## mlflow ui
 

@@ -165,11 +165,24 @@ point-level positions that align with `origin_segment` labels.
 ### Combined Detection and Segmentation
 
 The existing `multi/ptv3` configurations are supported by the preview pipeline.
-A combined sample is logged as two sibling branches, `detection3d` and
-`segmentation3d`, so predicted and ground-truth boxes and point labels can be
-inspected together. Prediction previews reuse the model's existing evaluation
-output conversion to decode both branches; no visualization code is added to the
-model.
+A combined sample is logged below one `scene` hierarchy. The Rerun blueprint
+presents ground truth and prediction side by side, with the matching detection
+boxes overlaid on each point cloud. Prediction previews reuse the model's
+decoded detection output and pointwise segmentation logits; no visualization
+code is added to the model.
+
+The explicit scene layout contains:
+
+- a **Semantic** comparison with GT and predicted pointwise classes
+- an **Intensity** comparison using normalized LiDAR return intensity
+- a **Geometry** comparison with a neutral point color
+- an **Uncertainty** comparison between logit entropy and predicted semantics
+- a **Cameras** tab for the image streams, while every 3D comparison also
+  includes the calibrated camera frustums
+- compact 3D IoU quality and match-count plots below GT/PD detection comparisons
+
+The three point-cloud tabs make the coloring mode selectable in the viewer.
+`--point-color-mode` only chooses which one is initially active.
 
 ### Detection 3D
 
@@ -186,25 +199,32 @@ The detection adapter can log:
   true-positive, false-positive, false-negative, precision, recall, and mean
   matched-IoU scalars
 
-Detection and segmentation use sibling `prediction` and `ground_truth` scene
-entities. A frame with no detection annotations remains a segmentation-only
-preview; no synthetic detection objects are created.
+Detection and segmentation use sibling `scene/prediction` and
+`scene/ground_truth` entities. A frame with no detection annotations remains a
+segmentation-only preview; no synthetic detection objects are created.
 
 ### Camera and timing behavior
 
 Each available camera is logged as a transform, pinhole calibration, and image.
 The Rerun blueprint places the camera frustums in the same 3D scene as the
 LiDAR points and boxes, enabling live 3D camera views and projection inspection.
-The scene origin is the detection or segmentation entity rather than the Rerun
-root, so empty `/` Viewport and Streams entries are not created.
+Every explicit 3D view uses `scene` as its origin. Automatic views are disabled,
+and the Blueprint and Selection panels start collapsed, so a root `/` text view
+or stream is not added to the working layout.
 Camera overlays are pointwise LiDAR segmentation only; camera/pixel
 segmentation is outside this scope.
 
-Preview samples are logged at their native timeline steps. If prediction frames
-arrive more frequently than ground truth, intermediate frames show prediction
-and point-cloud data only; ground truth is omitted until a ground-truth frame is
-available. Each frame replaces the previous point-cloud entity at its timeline
-step, so prediction multi-sweep streams do not accumulate stale points.
+For T4 multi-task datasets, one annotated keyframe acts as a preview anchor. At
+the default `--prediction-frequency-hz 10`, the provider resolves the nine
+numbered LiDAR and camera files between adjacent 1 Hz keyframes. The anchor is
+rendered with GT and prediction, while intermediate frames contain prediction
+only. Missing source files are skipped, scene boundaries are never crossed, and
+GT is neither interpolated nor held from the previous frame.
+
+Before each timeline step, the dynamic LiDAR, prediction, ground-truth, camera,
+metric, and metadata entities are cleared recursively. Intermediate prediction
+records also force `sweeps=[]`, so only the current source cloud is inferred and
+displayed; points from previous frames cannot accumulate.
 
 The preview setting `VisualizationPreviewConfig.point_color_mode` accepts
 `semantic` (default), `intensity`, or `solid`. For `intensity`, the fourth point
@@ -222,39 +242,41 @@ Visualization is now wired into a dedicated CLI preview command:
 ```bash
 autoware-ml visualize \
     --config-name <task>/<model>/<config> \
-    --checkpoint <path/to/model.ckpt> \
+    --weights <path/to/model.ckpt> \
+    --mode predictions \
     --split test \
     --sample-index 0 \
-    --max-samples 1
+    --max-samples 1 \
+    --prediction-frequency-hz 10 \
+    --point-color-mode semantic
 ```
 
 This path:
 
 1. Instantiates the configured datamodule.
-2. Optionally instantiates the configured model and loads a checkpoint.
+2. Optionally instantiates the configured model and loads `--weights`.
 3. Builds a one-sample preview dataloader for the selected split.
-4. Runs the split-specific dataset transforms and collation path; when a checkpoint is provided, the model-owned preprocessing and prediction path is used.
+4. Runs the split-specific dataset transforms and collation path; when weights are provided, the model-owned preprocessing and prediction path is used.
 5. Either logs transformed model inputs directly or runs `predict_step(...)` and logs predictions.
 6. Emits task-specific visualization events through `VisualizationSession`.
 
 That keeps visualization out of the Lightning evaluation loop while making the
 feature immediately usable.
 
-When no checkpoint is provided, the same command falls back to transformed-data
+When no weights are provided, the same command falls back to transformed-data
 preview and logs the actual model inputs after the selected split pipeline,
 without running prediction.
 
-When multiple samples are previewed, the Rerun backend logs each sample on the
-shared `frame` timeline, so the viewer's bottom scrubber can move between
-samples directly.
+When multiple samples are previewed, the Rerun backend logs them on the shared
+`frame` timeline and records their source timestamps on `sensor_time`, so the
+viewer scrubber can move between prediction frames directly.
 
 ## Planned Integration Points
 
-The next integration steps are:
+Possible later integration steps are:
 
 1. Add a narrow `--show` path for `autoware-ml test` and/or `predict`.
-2. Add richer image/camera overlays for multiview detection preview.
-3. Allow selected transforms or test helpers to emit visualization events
+2. Allow selected transforms or test helpers to emit visualization events
    through `VisualizationSession` instead of saving ad hoc preview files.
 
 ## Recommended Usage Pattern
