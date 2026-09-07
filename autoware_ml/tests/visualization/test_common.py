@@ -58,9 +58,7 @@ def test_resolve_palette_size_takes_the_maximum_across_arrays() -> None:
 
 
 def test_build_class_annotation_context_labels_every_palette_entry() -> None:
-    context = build_class_annotation_context(
-        "root", build_label_palette(3), ["road", "car"]
-    )
+    context = build_class_annotation_context("root", build_label_palette(3), ["road", "car"])
 
     assert context is not None
     assert context.path == "root"
@@ -85,9 +83,7 @@ def test_format_class_label_appends_score_when_present() -> None:
 
 def test_build_sample_metadata_events_is_empty_without_a_name() -> None:
     assert build_sample_metadata_events("root", None) == []
-    assert (
-        build_sample_metadata_events("root", "sample-1")[0].path == "root/meta/sample"
-    )
+    assert build_sample_metadata_events("root", "sample-1")[0].path == "root/meta/sample"
 
 
 def test_ensure_xyz_rejects_non_point_shapes() -> None:

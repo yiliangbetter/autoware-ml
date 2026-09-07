@@ -71,11 +71,7 @@ def point_cloud_colors(points: Any, mode: str = "semantic") -> np.ndarray | None
     if array.shape[1] < 4:
         raise ValueError("intensity coloring requires points with an intensity column")
     intensity = np.nan_to_num(array[:, 3], nan=0.0, posinf=0.0, neginf=0.0)
-    low, high = (
-        (float(intensity.min()), float(intensity.max()))
-        if intensity.size
-        else (0.0, 0.0)
-    )
+    low, high = (float(intensity.min()), float(intensity.max())) if intensity.size else (0.0, 0.0)
     normalized = np.zeros_like(intensity, dtype=np.float32)
     if high > low:
         normalized = (intensity - low) / (high - low)

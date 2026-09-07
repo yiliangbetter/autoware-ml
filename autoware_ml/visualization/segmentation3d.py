@@ -63,19 +63,13 @@ def build_segmentation3d_data_events(
     palette = build_label_palette(resolve_palette_size([labels_np], class_names))
     radii = np.full((point_positions.shape[0],), point_radius, dtype=np.float32)
     label_text = _build_point_labels(labels_np, class_names, point_labels)
-    events: list[VisualizationEvent] = build_sample_metadata_events(
-        root_path, sample_name
-    )
+    events: list[VisualizationEvent] = build_sample_metadata_events(root_path, sample_name)
     semantic_path = f"{root_path}/ground_truth/segmentation"
-    annotation_context = build_class_annotation_context(
-        semantic_path, palette, class_names
-    )
+    annotation_context = build_class_annotation_context(semantic_path, palette, class_names)
     if annotation_context is not None:
         events.insert(0, annotation_context)
     events.extend(
-        build_lidar_reference_events(
-            points, root_path=root_path, point_radius=point_radius
-        )
+        build_lidar_reference_events(points, root_path=root_path, point_radius=point_radius)
     )
     events.append(
         PointCloud3DEvent(
@@ -124,26 +118,18 @@ def build_segmentation3d_events(
     else:
         gt_labels_np = None
 
-    palette = build_label_palette(
-        resolve_palette_size([pred_labels_np, gt_labels_np], class_names)
-    )
+    palette = build_label_palette(resolve_palette_size([pred_labels_np, gt_labels_np], class_names))
     radii = np.full((point_positions.shape[0],), point_radius, dtype=np.float32)
     pred_label_text = _build_point_labels(pred_labels_np, class_names, point_labels)
-    events: list[VisualizationEvent] = build_sample_metadata_events(
-        root_path, sample_name
-    )
+    events: list[VisualizationEvent] = build_sample_metadata_events(root_path, sample_name)
     prediction_path = f"{root_path}/prediction/segmentation"
     ground_truth_path = f"{root_path}/ground_truth/segmentation"
     for semantic_path in (prediction_path, ground_truth_path):
-        annotation_context = build_class_annotation_context(
-            semantic_path, palette, class_names
-        )
+        annotation_context = build_class_annotation_context(semantic_path, palette, class_names)
         if annotation_context is not None:
             events.append(annotation_context)
     events.extend(
-        build_lidar_reference_events(
-            points, root_path=root_path, point_radius=point_radius
-        )
+        build_lidar_reference_events(points, root_path=root_path, point_radius=point_radius)
     )
     events.append(
         PointCloud3DEvent(
@@ -162,9 +148,7 @@ def build_segmentation3d_events(
             PointCloud3DEvent(
                 path=ground_truth_path,
                 positions=point_positions,
-                colors=labels_to_colors(
-                    gt_labels_np, palette, ignore_index=ignore_index
-                ),
+                colors=labels_to_colors(gt_labels_np, palette, ignore_index=ignore_index),
                 labels=gt_label_text,
                 radii=radii,
                 class_ids=gt_labels_np,
@@ -214,9 +198,7 @@ def build_segmentation3d_events(
                     value=float(probabilities.max(axis=1).mean()),
                 )
             )
-            entropy = -(probabilities * np.log(np.clip(probabilities, 1e-8, 1.0))).sum(
-                axis=1
-            )
+            entropy = -(probabilities * np.log(np.clip(probabilities, 1e-8, 1.0))).sum(axis=1)
             entropy_norm = (entropy / np.log(logits_np.shape[1])).astype(np.float32)
             events.append(
                 ScalarEvent(

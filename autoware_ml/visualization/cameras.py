@@ -62,9 +62,7 @@ def build_camera_events(
     """
     events: list[VisualizationEvent] = []
     for cam_name, cam_info in images.items():
-        events.extend(
-            _build_single_camera_events(cam_info, f"{root_path}/{cam_name}", cam_name)
-        )
+        events.extend(_build_single_camera_events(cam_info, f"{root_path}/{cam_name}", cam_name))
     return events
 
 
@@ -74,9 +72,7 @@ def _build_single_camera_events(
     cam_name: str,
 ) -> list[VisualizationEvent]:
     """Build the three visualization events for one camera."""
-    missing = [
-        key for key in ("img_path", "cam2img", "lidar2cam") if cam_info.get(key) is None
-    ]
+    missing = [key for key in ("img_path", "cam2img", "lidar2cam") if cam_info.get(key) is None]
     if missing:
         raise ValueError(
             f"Camera {cam_name!r} is missing required calibration keys: {', '.join(missing)}."
