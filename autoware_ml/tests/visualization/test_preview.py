@@ -26,6 +26,7 @@ from autoware_ml.tests.visualization.conftest import (
     CalibrationPreviewModel,
     DetectionPreviewModel,
     PreviewDataModule,
+    PreviewDataset,
     PreviewModelBase,
     RecordingBackend,
     SegmentationPreviewModel,
@@ -125,6 +126,42 @@ class _DecodedMultiPreviewModel(PreviewModelBase):
             "seg_pred_labels": labels,
             "seg_pred_logits": logits,
         }
+
+
+class _IntermediatePreviewDataset(PreviewDataset):
+    """Expose one prediction-only record after its GT keyframe."""
+
+    def __init__(
+        self,
+        samples: list[dict[str, Any]],
+        intermediate_sample: dict[str, Any],
+    ) -> None:
+        super().__init__(samples)
+        self.intermediate_sample = intermediate_sample
+
+    def get_intermediate_prediction_infos(
+        self, index: int, prediction_frequency_hz: float
+    ) -> list[dict[str, Any]]:
+        assert index == 0
+        assert prediction_frequency_hz == 10.0
+        return [self.intermediate_sample]
+
+
+class _IntermediatePreviewDataModule(PreviewDataModule):
+    """Create a preview dataset with an intermediate-frame provider."""
+
+    def __init__(
+        self,
+        keyframe: dict[str, Any],
+        intermediate_frame: dict[str, Any],
+        collation_map: dict[str, str],
+    ) -> None:
+        super().__init__([keyframe], collation_map)
+        self.intermediate_frame = intermediate_frame
+
+    def _create_dataset(self, split: str, dataset_transforms: Any = None) -> PreviewDataset:
+        del split, dataset_transforms
+        return _IntermediatePreviewDataset(self.samples, self.intermediate_frame)
 
 
 def test_preview_logs_a_calibration_sample(
@@ -275,6 +312,60 @@ def test_multitask_preview_omits_explicitly_unavailable_ground_truth(
     semantic_paths = preview_session.paths_of(PointCloud3DEvent)
     assert "scene/prediction/segmentation" in semantic_paths
     assert "scene/ground_truth/segmentation" not in semantic_paths
+
+
+def test_multitask_preview_runs_intermediate_frames_at_10hz_without_gt(
+    preview_session: RecordingBackend,
+) -> None:
+    common = {
+        "coord": np.array([[0.0, 0.0, 0.0], [1.0, 1.0, 1.0]], dtype=np.float32),
+        "strength": np.array([[0.1], [0.9]], dtype=np.float32),
+        "inverse": np.array([0, 1, 0], dtype=np.int64),
+    }
+    keyframe = {
+        **common,
+        "origin_segment": np.array([0, 1, 0], dtype=np.int64),
+        "gt_boxes": np.array([[1.0, 2.0, 0.0, 4.0, 2.0, 1.5, 0.0]]),
+        "gt_labels": np.array([0], dtype=np.int64),
+        "has_detection_ground_truth": True,
+        "has_segmentation_ground_truth": True,
+        "timestamp": 100.0,
+    }
+    intermediate_frame = {
+        **common,
+        "has_detection_ground_truth": False,
+        "has_segmentation_ground_truth": False,
+        "timestamp": 100.1,
+    }
+    collation_map = {
+        "coord": "concat",
+        "strength": "concat",
+        "inverse": "index_concat",
+        "origin_segment": "concat",
+        "gt_boxes": "list",
+        "gt_labels": "list",
+    }
+
+    visualized = run_visualization_preview(
+        _DecodedMultiPreviewModel(),
+        _IntermediatePreviewDataModule(
+            keyframe,
+            intermediate_frame,
+            collation_map,
+        ),
+        _NOOP_PREVIEW,
+    )
+
+    assert visualized == 2
+    assert preview_session.steps == [0, 1]
+    assert preview_session.timestamps == [100.0, 100.1]
+    assert len(preview_session.paths_of(ClearEvent)) == 10
+    assert preview_session.paths_of(Boxes3DEvent) == [
+        "scene/prediction/detections",
+        "scene/ground_truth/detections",
+        "scene/prediction/detections",
+    ]
+    assert preview_session.paths_of(PointCloud3DEvent).count("scene/ground_truth/segmentation") == 1
 
 
 def test_preview_logs_transformed_voxelized_data_without_a_model(

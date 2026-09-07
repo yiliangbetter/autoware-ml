@@ -23,8 +23,12 @@ treat box-less frames as detection-unsupervised).
 
 from __future__ import annotations
 
+from copy import deepcopy
+import logging
 import pickle
 from collections.abc import Mapping, Sequence
+from pathlib import Path
+import re
 from typing import Any
 
 from torch.utils.data import DataLoader
@@ -48,6 +52,47 @@ from autoware_ml.datamodule.t4dataset.detection3d import (
 )
 from autoware_ml.transforms.base import TransformsCompose
 from autoware_ml.transforms.boxes3d.annotations import normalize_filter_attributes
+
+logger = logging.getLogger(__name__)
+
+
+def _interpolate_numbered_path(
+    current_path: str,
+    next_path: str,
+    fraction: float,
+) -> Path | None:
+    """Interpolate between matching paths whose filenames contain frame numbers."""
+    current = Path(current_path)
+    following = Path(next_path)
+    if current.parent != following.parent:
+        return None
+
+    current_matches = list(re.finditer(r"\d+", current.name))
+    next_matches = list(re.finditer(r"\d+", following.name))
+    if not current_matches or not next_matches:
+        return None
+    current_match = current_matches[-1]
+    next_match = next_matches[-1]
+    if (
+        current.name[: current_match.start()] != following.name[: next_match.start()]
+        or current.name[current_match.end() :] != following.name[next_match.end() :]
+    ):
+        return None
+
+    current_number = int(current_match.group())
+    next_number = int(next_match.group())
+    target_number = round(current_number + (next_number - current_number) * fraction)
+    lower, upper = sorted((current_number, next_number))
+    if not lower < target_number < upper:
+        return None
+
+    width = max(len(current_match.group()), len(next_match.group()))
+    filename = (
+        current.name[: current_match.start()]
+        + f"{target_number:0{width}d}"
+        + current.name[current_match.end() :]
+    )
+    return current.parent / filename
 
 
 class T4SegmentationDetection3DDataset(Dataset):
@@ -152,14 +197,100 @@ class T4SegmentationDetection3DDataset(Dataset):
             info["images"] = {
                 camera_name: {
                     **camera_info,
-                    "img_path": resolve_data_path(
-                        self.data_root, camera_info["img_path"]
-                    ),
+                    "img_path": resolve_data_path(self.data_root, camera_info["img_path"]),
                 }
                 for camera_name, camera_info in images.items()
                 if camera_info.get("img_path") is not None
             }
         return info
+
+    def get_intermediate_prediction_infos(
+        self,
+        index: int,
+        prediction_frequency_hz: float,
+    ) -> list[dict[str, Any]]:
+        """Build unlabeled current-sweep frames between adjacent 1 Hz GT records.
+
+        T4 segdet annotation pickles contain ground-truth keyframes, while the
+        source folders retain the intermediate LiDAR and camera files. This
+        method reconstructs those prediction-only records by interpolating the
+        numbered filenames and timestamps. Historical ``sweeps`` are always
+        emptied so each prediction consumes only its current 10 Hz frame.
+        """
+        if prediction_frequency_hz <= 0:
+            raise ValueError("prediction_frequency_hz must be greater than zero")
+        if index + 1 >= len(self):
+            return []
+
+        current = self.get_data_info(index)
+        following = self.get_data_info(index + 1)
+        if current.get("scene_token") is None or current.get("scene_token") != following.get(
+            "scene_token"
+        ):
+            return []
+
+        current_timestamp = float(current["timestamp"])
+        next_timestamp = float(following["timestamp"])
+        duration = next_timestamp - current_timestamp
+        interval_count = int(round(duration * prediction_frequency_hz))
+        if duration <= 0 or interval_count <= 1:
+            return []
+
+        intermediate_infos: list[dict[str, Any]] = []
+        used_lidar_paths: set[Path] = set()
+        for offset in range(1, interval_count):
+            fraction = offset / interval_count
+            lidar_path = _interpolate_numbered_path(
+                current["lidar_path"], following["lidar_path"], fraction
+            )
+            if lidar_path is None or lidar_path in used_lidar_paths or not lidar_path.is_file():
+                if lidar_path is not None and lidar_path not in used_lidar_paths:
+                    logger.warning("Skipping missing intermediate LiDAR frame: %s", lidar_path)
+                continue
+            used_lidar_paths.add(lidar_path)
+
+            info = deepcopy(current)
+            info["sample_token"] = (
+                f"{current['sample_token']}:prediction:{lidar_path.name.split('.', 1)[0]}"
+            )
+            info["timestamp"] = current_timestamp + duration * fraction
+            info["lidar_path"] = str(lidar_path)
+            info["sweeps"] = []
+            info["instances"] = []
+            info["label_to_category"] = {}
+            info["has_detection_ground_truth"] = False
+            info["has_segmentation_ground_truth"] = False
+            info["pts_semantic_mask_categories"] = {}
+            info.pop("pts_semantic_mask_path", None)
+
+            interpolated_images: dict[str, Any] = {}
+            current_images = current.get("images", {})
+            next_images = following.get("images", {})
+            for camera_name, current_camera in current_images.items():
+                next_camera = next_images.get(camera_name)
+                if not isinstance(next_camera, Mapping):
+                    continue
+                image_path = _interpolate_numbered_path(
+                    current_camera["img_path"], next_camera["img_path"], fraction
+                )
+                if image_path is None or not image_path.is_file():
+                    continue
+                camera_info = deepcopy(current_camera)
+                camera_info["img_path"] = str(image_path)
+                if (
+                    current_camera.get("timestamp") is not None
+                    and next_camera.get("timestamp") is not None
+                ):
+                    camera_info["timestamp"] = (
+                        float(current_camera["timestamp"])
+                        + (float(next_camera["timestamp"]) - float(current_camera["timestamp"]))
+                        * fraction
+                    )
+                interpolated_images[camera_name] = camera_info
+            info["images"] = interpolated_images
+            intermediate_infos.append(info)
+
+        return intermediate_infos
 
 
 class T4SegmentationDetection3DDataModule(DataModule):

@@ -76,9 +76,7 @@ CLI_RUNTIME_MODULE = "autoware_ml.cli.runtime"
 class OptionFirstTyperCommand(TyperCommand):
     """Suggest command options even when completion starts on an empty token."""
 
-    def shell_complete(
-        self, ctx: click.Context, incomplete: str
-    ) -> list[CompletionItem]:
+    def shell_complete(self, ctx: click.Context, incomplete: str) -> list[CompletionItem]:
         """Return shell completions with options prioritized for empty tokens.
 
         Args:
@@ -99,8 +97,7 @@ class OptionFirstTyperCommand(TyperCommand):
                 or param.hidden
                 or (
                     not param.multiple
-                    and ctx.get_parameter_source(param.name)
-                    is ParameterSource.COMMANDLINE
+                    and ctx.get_parameter_source(param.name) is ParameterSource.COMMANDLINE
                 )
             ):
                 continue
@@ -276,9 +273,7 @@ def train(
         new_run: Whether to fork the resumed training into a new MLflow run.
     """
     if weights and resume_checkpoint:
-        raise typer.BadParameter(
-            "--weights and --resume-checkpoint are mutually exclusive."
-        )
+        raise typer.BadParameter("--weights and --resume-checkpoint are mutually exclusive.")
     if new_run and not resume_checkpoint:
         raise typer.BadParameter("--new-run requires --resume-checkpoint.")
 
@@ -289,9 +284,7 @@ def train(
     if resume_checkpoint:
         resume_path = Path(resume_checkpoint).expanduser().resolve()
         if not resume_path.is_file():
-            raise typer.BadParameter(
-                f"Resume checkpoint '{resume_checkpoint}' does not exist."
-            )
+            raise typer.BadParameter(f"Resume checkpoint '{resume_checkpoint}' does not exist.")
         resume_checkpoint = str(resume_path)
         hydra_overrides.append(f"+resume_checkpoint={resume_checkpoint}")
 
@@ -495,6 +488,13 @@ def visualize(
         int,
         typer.Option("--max-samples", help="Number of consecutive samples to preview"),
     ] = 1,
+    prediction_frequency_hz: Annotated[
+        float,
+        typer.Option(
+            "--prediction-frequency-hz",
+            help="Intermediate prediction frequency for datasets with source frames",
+        ),
+    ] = 10.0,
     backend: Annotated[
         VisualizationBackendChoice,
         typer.Option("--backend", help="Visualization backend: rerun or noop"),
@@ -505,15 +505,11 @@ def visualize(
     ] = "auto",
     point_labels: Annotated[
         bool,
-        typer.Option(
-            "--point-labels/--no-point-labels", help="Log per-point label text"
-        ),
+        typer.Option("--point-labels/--no-point-labels", help="Log per-point label text"),
     ] = False,
     point_color_mode: Annotated[
         str,
-        typer.Option(
-            "--point-color-mode", help="Point colors: semantic, intensity, or solid"
-        ),
+        typer.Option("--point-color-mode", help="Point colors: semantic, intensity, or solid"),
     ] = "semantic",
     web_port: Annotated[
         int,
@@ -525,9 +521,7 @@ def visualize(
     ] = 9876,
     wait: Annotated[
         bool,
-        typer.Option(
-            "--wait/--no-wait", help="Keep the Rerun web server alive after logging"
-        ),
+        typer.Option("--wait/--no-wait", help="Keep the Rerun web server alive after logging"),
     ] = True,
     recording_id: Annotated[
         str | None,
@@ -545,6 +539,7 @@ def visualize(
         split: Dataset split to preview.
         sample_index: First dataset sample index to visualize.
         max_samples: Number of consecutive samples to visualize.
+        prediction_frequency_hz: Frequency used for prediction-only frames between GT keyframes.
         backend: Visualization backend name.
         device: Preview execution device.
         point_labels: Whether to log per-point label text.
@@ -558,6 +553,7 @@ def visualize(
         f"+visualization.split={split}",
         f"+visualization.sample_index={sample_index}",
         f"+visualization.max_samples={max_samples}",
+        f"+visualization.prediction_frequency_hz={prediction_frequency_hz}",
         f"+visualization.backend={backend}",
         f"+visualization.device={device}",
         f"+visualization.point_labels={str(point_labels).lower()}",
@@ -585,9 +581,7 @@ def visualize(
 
 @mlflow_app.command(name="ui", cls=OptionFirstTyperCommand)
 def mlflow_ui(
-    host: Annotated[
-        str, typer.Option("--host", "-h", help="Host to listen on")
-    ] = "0.0.0.0",
+    host: Annotated[str, typer.Option("--host", "-h", help="Host to listen on")] = "0.0.0.0",
     port: Annotated[int, typer.Option("--port", "-p", help="Port to listen on")] = 5000,
     db_path: Annotated[
         str,
@@ -646,9 +640,7 @@ def mlflow_export(
     ] = None,
     override: Annotated[
         bool,
-        typer.Option(
-            "--override", help="Allow replacing an existing exported MLflow store"
-        ),
+        typer.Option("--override", help="Allow replacing an existing exported MLflow store"),
     ] = False,
 ) -> None:
     """Export one MLflow experiment into an isolated tracking store.
@@ -682,9 +674,7 @@ def create_dataset(
         str,
         typer.Option("--dataset", help="Dataset name (e.g., nuscenes, nuscenes_mini)"),
     ],
-    task: Annotated[
-        list[str], typer.Option("--task", help="Task name (can be repeated)")
-    ],
+    task: Annotated[list[str], typer.Option("--task", help="Task name (can be repeated)")],
     root_path: Annotated[
         str,
         typer.Option(
@@ -734,9 +724,7 @@ def session_start(
     ] = None,
     attach: Annotated[
         bool,
-        typer.Option(
-            "--attach", help="Open the live viewer immediately after starting"
-        ),
+        typer.Option("--attach", help="Open the live viewer immediately after starting"),
     ] = False,
     raw: Annotated[
         bool,
@@ -783,9 +771,7 @@ def session_start(
 def session_attach(
     name: Annotated[
         str,
-        typer.Option(
-            "--name", "-n", help="Session name", autocompletion=complete_session_name
-        ),
+        typer.Option("--name", "-n", help="Session name", autocompletion=complete_session_name),
     ],
 ) -> None:
     """Render a live terminal view of a managed session.
@@ -800,9 +786,7 @@ def session_attach(
 def session_detach(
     name: Annotated[
         str,
-        typer.Option(
-            "--name", "-n", help="Session name", autocompletion=complete_session_name
-        ),
+        typer.Option("--name", "-n", help="Session name", autocompletion=complete_session_name),
     ],
 ) -> None:
     """Disconnect raw tmux clients from a managed session.
@@ -829,9 +813,7 @@ def session_ls() -> None:
 def session_stop(
     name: Annotated[
         str,
-        typer.Option(
-            "--name", "-n", help="Session name", autocompletion=complete_session_name
-        ),
+        typer.Option("--name", "-n", help="Session name", autocompletion=complete_session_name),
     ],
 ) -> None:
     """Stop a managed background task and close its session.
