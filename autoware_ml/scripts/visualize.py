@@ -43,7 +43,7 @@ _CONFIG_PATH = get_config_path()
 
 
 def _resolve_class_names(
-    cfg: DictConfig, visualization_cfg: Any
+    cfg: DictConfig, visualization_cfg: Any, task: str
 ) -> tuple[str, ...] | None:
     """Resolve semantic class names for the viewer legend and instance labels.
 
@@ -52,6 +52,9 @@ def _resolve_class_names(
     names at runtime and would otherwise render every legend entry and point
     label as a bare integer id.
     """
+    explicit = visualization_cfg.get(f"{task}_class_names", None)
+    if explicit:
+        return tuple(str(name) for name in explicit)
     explicit = visualization_cfg.get("class_names", None)
     if explicit:
         return tuple(str(name) for name in explicit)
@@ -59,10 +62,8 @@ def _resolve_class_names(
     dataset_cfg = cfg.get("dataset", None)
     if dataset_cfg is None:
         return None
-    for task in ("segmentation3d", "detection3d"):
-        task_cfg = dataset_cfg.get(task, None)
-        if task_cfg is None:
-            continue
+    task_cfg = dataset_cfg.get(task, None)
+    if task_cfg is not None:
         class_names = task_cfg.get("class_names", None)
         if class_names:
             return tuple(str(name) for name in class_names)
@@ -80,7 +81,12 @@ def _build_preview_config(cfg: DictConfig) -> VisualizationPreviewConfig:
         device=str(visualization_cfg.get("device", "auto")),
         point_labels=bool(visualization_cfg.get("point_labels", False)),
         point_color_mode=str(visualization_cfg.get("point_color_mode", "semantic")),
-        class_names=_resolve_class_names(cfg, visualization_cfg),
+        segmentation_class_names=_resolve_class_names(
+            cfg, visualization_cfg, "segmentation3d"
+        ),
+        detection_class_names=_resolve_class_names(
+            cfg, visualization_cfg, "detection3d"
+        ),
         session=VisualizationSessionConfig(
             backend=str(visualization_cfg.get("backend", "rerun")),
             application_id=str(visualization_cfg.get("application_id", "autoware-ml")),

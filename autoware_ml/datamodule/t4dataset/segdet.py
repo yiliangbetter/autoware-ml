@@ -38,9 +38,9 @@ from autoware_ml.datamodule.common.detection3d import (
     resolve_data_path,
     resolve_sweep_paths,
 )
-from autoware_ml.datamodule.t4dataset.frame_meta import scene_dir_fragment
 from autoware_ml.datamodule.common.serialization import SerializedSampleList
 from autoware_ml.datamodule.common.sources import AnnotationSource, coerce_annotation_sources
+from autoware_ml.datamodule.t4dataset.frame_meta import scene_dir_fragment
 from autoware_ml.datamodule.t4dataset.detection3d import (
     FrameSamplingConfig,
     coerce_frame_sampling,
@@ -121,6 +121,8 @@ class T4SegmentationDetection3DDataset(Dataset):
             sample = normalize_detection_sample(raw_sample)
             if not source.det3d:
                 sample["instances"] = []
+            sample["has_detection_ground_truth"] = source.det3d
+            sample["has_segmentation_ground_truth"] = source.seg3d
             sample["label_to_category"] = label_to_category
             sample["pts_semantic_mask_path"] = raw_sample["pts_semantic_mask_path"]
             sample["pts_semantic_mask_categories"] = (
@@ -143,12 +145,14 @@ class T4SegmentationDetection3DDataset(Dataset):
             Metadata dictionary with detection and segmentation fields.
         """
         sample = self.data_infos[index]
-        return {
+        info = {
             "instances": sample.get("instances", []),
             "class_names": self.class_names,
             "name_mapping": self.name_mapping,
             "label_to_category": sample["label_to_category"],
             "sample_token": sample["token"],
+            "has_detection_ground_truth": sample["has_detection_ground_truth"],
+            "has_segmentation_ground_truth": sample["has_segmentation_ground_truth"],
             "lidar_path": resolve_data_path(self.data_root, sample["lidar_path"]),
             "num_pts_feats": int(sample["lidar_points"].get("num_pts_feats", 5)),
             "sweeps": resolve_sweep_paths(sample, self.data_root),
@@ -160,6 +164,19 @@ class T4SegmentationDetection3DDataset(Dataset):
             "ego2global": np.asarray(sample["ego2global"], dtype=np.float64),
             "scene_token": scene_dir_fragment(sample["lidar_path"], self.data_root),
         }
+        images = sample.get("images")
+        if isinstance(images, Mapping):
+            info["images"] = {
+                camera_name: {
+                    **camera_info,
+                    "img_path": resolve_data_path(
+                        self.data_root, camera_info["img_path"]
+                    ),
+                }
+                for camera_name, camera_info in images.items()
+                if camera_info.get("img_path") is not None
+            }
+        return info
 
 
 class T4SegmentationDetection3DDataModule(DataModule):

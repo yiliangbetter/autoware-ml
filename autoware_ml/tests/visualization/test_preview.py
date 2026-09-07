@@ -95,7 +95,9 @@ _SEGMENTATION_COLLATION = {"points": "concat", "segment": "concat"}
 def _segmentation_sample() -> dict[str, Any]:
     """Build one segmentation sample with per-point ground truth."""
     return {
-        "points": np.array([[0.0, 0.0, 0.0, 1.0], [1.0, 0.0, 0.0, 1.0]], dtype=np.float32),
+        "points": np.array(
+            [[0.0, 0.0, 0.0, 1.0], [1.0, 0.0, 0.0, 1.0]], dtype=np.float32
+        ),
         "segment": np.array([0, 1], dtype=np.int64),
     }
 
@@ -131,8 +133,9 @@ def test_preview_logs_a_calibration_sample(
     assert visualized == 1
     assert preview_session.steps == [0]
     assert "calibration_status/camera/fused" in preview_session.paths_of(ImageEvent)
-    assert "calibration_status/camera/image/projected_points" in preview_session.paths_of(
-        Points2DEvent
+    assert (
+        "calibration_status/camera/image/projected_points"
+        in preview_session.paths_of(Points2DEvent)
     )
 
 
@@ -172,7 +175,8 @@ def test_preview_reconstructs_points_for_voxelized_segmentation(
     prediction = next(
         event
         for event in preview_session.events
-        if isinstance(event, PointCloud3DEvent) and event.path == "segmentation3d/prediction"
+        if isinstance(event, PointCloud3DEvent)
+        and event.path == "segmentation3d/prediction"
     )
     assert prediction.positions.shape == (3, 3)
 
@@ -198,13 +202,21 @@ def test_preview_logs_transformed_voxelized_data_without_a_model(
             {"coord": "concat", "inverse": "index_concat", "origin_segment": "concat"},
         ),
         VisualizationPreviewConfig(
-            mode="data", split="test", session=VisualizationSessionConfig(backend="noop")
+            mode="data",
+            split="test",
+            session=VisualizationSessionConfig(backend="noop"),
         ),
     )
 
     assert visualized == 1
-    assert preview_session.paths_of(PointCloud3DEvent) == ["dataset/segmentation3d/data"]
-    logged = next(event for event in preview_session.events if isinstance(event, PointCloud3DEvent))
+    assert preview_session.paths_of(PointCloud3DEvent) == [
+        "dataset/segmentation3d/data"
+    ]
+    logged = next(
+        event
+        for event in preview_session.events
+        if isinstance(event, PointCloud3DEvent)
+    )
     assert logged.positions.shape == (3, 3)
 
 
@@ -237,7 +249,10 @@ def test_resolve_class_names_prefers_the_configured_names() -> None:
     config = VisualizationPreviewConfig(class_names=("configured",))
 
     resolved = _resolve_class_names(
-        config, {"class_names": [["collated"]]}, {"class_names": ["raw"]}
+        config,
+        {"class_names": [["collated"]]},
+        {"class_names": ["raw"]},
+        task="segmentation3d",
     )
 
     assert resolved == ("configured",)
@@ -245,13 +260,34 @@ def test_resolve_class_names_prefers_the_configured_names() -> None:
 
 def test_resolve_class_names_falls_back_to_the_raw_dataset_info() -> None:
     """Split pipelines drop class names, leaving raw dataset info the only source."""
-    resolved = _resolve_class_names(_NOOP_PREVIEW, {}, {"class_names": ["car", "truck"]})
+    resolved = _resolve_class_names(
+        _NOOP_PREVIEW,
+        {},
+        {"class_names": ["car", "truck"]},
+        task="detection3d",
+    )
 
     assert resolved == ["car", "truck"]
 
 
 def test_resolve_class_names_returns_none_when_no_source_carries_them() -> None:
-    assert _resolve_class_names(_NOOP_PREVIEW, {}, None) is None
+    assert _resolve_class_names(_NOOP_PREVIEW, {}, None, task="segmentation3d") is None
+
+
+def test_resolve_class_names_keeps_multitask_legends_independent() -> None:
+    config = VisualizationPreviewConfig(
+        segmentation_class_names=("road", "vegetation"),
+        detection_class_names=("car", "pedestrian"),
+    )
+
+    assert _resolve_class_names(config, {}, None, task="segmentation3d") == (
+        "road",
+        "vegetation",
+    )
+    assert _resolve_class_names(config, {}, None, task="detection3d") == (
+        "car",
+        "pedestrian",
+    )
 
 
 def test_preview_names_detection_instances_without_collated_class_names(
@@ -260,19 +296,30 @@ def test_preview_names_detection_instances_without_collated_class_names(
     """Boxes and legend must read as names even when collation drops class names."""
     visualized = run_visualization_preview(
         None,
-        PreviewDataModule([_detection_sample()], _DETECTION_COLLATION_WITHOUT_CLASS_NAMES),
+        PreviewDataModule(
+            [_detection_sample()], _DETECTION_COLLATION_WITHOUT_CLASS_NAMES
+        ),
         VisualizationPreviewConfig(
-            mode="data", split="test", session=VisualizationSessionConfig(backend="noop")
+            mode="data",
+            split="test",
+            session=VisualizationSessionConfig(backend="noop"),
         ),
     )
 
     assert visualized == 1
-    boxes = next(event for event in preview_session.events if isinstance(event, Boxes3DEvent))
+    boxes = next(
+        event for event in preview_session.events if isinstance(event, Boxes3DEvent)
+    )
     assert boxes.labels == ["car"]
     legend = next(
-        event for event in preview_session.events if isinstance(event, AnnotationContextEvent)
+        event
+        for event in preview_session.events
+        if isinstance(event, AnnotationContextEvent)
     )
-    assert [annotation.label for annotation in legend.annotations] == ["pedestrian", "car"]
+    assert [annotation.label for annotation in legend.annotations] == [
+        "pedestrian",
+        "car",
+    ]
 
 
 def test_preview_logs_transformed_data_without_a_model(
@@ -282,12 +329,16 @@ def test_preview_logs_transformed_data_without_a_model(
         None,
         PreviewDataModule([_segmentation_sample()], _SEGMENTATION_COLLATION),
         VisualizationPreviewConfig(
-            mode="data", split="test", session=VisualizationSessionConfig(backend="noop")
+            mode="data",
+            split="test",
+            session=VisualizationSessionConfig(backend="noop"),
         ),
     )
 
     assert visualized == 1
-    assert preview_session.paths_of(PointCloud3DEvent) == ["dataset/segmentation3d/data"]
+    assert preview_session.paths_of(PointCloud3DEvent) == [
+        "dataset/segmentation3d/data"
+    ]
     assert "dataset/segmentation3d/meta/sample" in preview_session.paths_of(TextEvent)
 
 
@@ -388,14 +439,18 @@ def test_preview_reports_observed_keys_when_no_task_matches(
     preview_session: RecordingBackend,
 ) -> None:
     """An unroutable sample must name what it saw instead of guessing a task."""
-    with pytest.raises(ValueError, match=r"Could not infer a visualization task.*points"):
+    with pytest.raises(
+        ValueError, match=r"Could not infer a visualization task.*points"
+    ):
         run_visualization_preview(
             None,
             PreviewDataModule(
                 [{"points": np.zeros((1, 4), dtype=np.float32)}], {"points": "concat"}
             ),
             VisualizationPreviewConfig(
-                mode="data", split="test", session=VisualizationSessionConfig(backend="noop")
+                mode="data",
+                split="test",
+                session=VisualizationSessionConfig(backend="noop"),
             ),
         )
 
@@ -405,7 +460,9 @@ def test_preview_routes_a_sample_matching_two_tasks(
 ) -> None:
     """Multi-task samples are rendered through both task adapters."""
     sample = {
-        "points": np.array([[0.0, 0.0, 0.0, 1.0], [1.0, 0.0, 0.0, 1.0]], dtype=np.float32),
+        "points": np.array(
+            [[0.0, 0.0, 0.0, 1.0], [1.0, 0.0, 0.0, 1.0]], dtype=np.float32
+        ),
         "segment": np.array([0, 1], dtype=np.int64),
         "gt_boxes": np.array([[1.0, 2.0, 3.0, 4.0, 2.0, 1.5, 0.1]], dtype=np.float32),
         "gt_labels": np.array([1], dtype=np.int64),
@@ -423,7 +480,9 @@ def test_preview_routes_a_sample_matching_two_tasks(
             },
         ),
         VisualizationPreviewConfig(
-            mode="data", split="test", session=VisualizationSessionConfig(backend="noop")
+            mode="data",
+            split="test",
+            session=VisualizationSessionConfig(backend="noop"),
         ),
     )
 

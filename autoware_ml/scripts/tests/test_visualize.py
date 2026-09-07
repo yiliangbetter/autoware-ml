@@ -83,6 +83,8 @@ def test_build_preview_config_maps_every_visualization_override() -> None:
                     "wait": False,
                     "server_memory_limit": "10%",
                     "timeline": "sample",
+                    "segmentation3d_class_names": ["road", "car"],
+                    "detection3d_class_names": ["car"],
                 }
             }
         )
@@ -94,6 +96,8 @@ def test_build_preview_config_maps_every_visualization_override() -> None:
     assert config.max_samples == 8
     assert config.device == "cpu"
     assert config.point_labels is True
+    assert config.segmentation_class_names == ("road", "car")
+    assert config.detection_class_names == ("car",)
     assert config.session.backend == "noop"
     assert config.session.application_id == "preview"
     assert config.session.recording_id == "run-1"
