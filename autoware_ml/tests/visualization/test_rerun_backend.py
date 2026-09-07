@@ -87,7 +87,12 @@ class _FakeAnnotationContext:
         payload: Any = (
             [[]]
             if type(self).serializes_empty
-            else [[{"class_id": info["id"], "label": info["label"]} for info in self.context]]
+            else [
+                [
+                    {"class_id": info["id"], "label": info["label"]}
+                    for info in self.context
+                ]
+            ]
         )
         return [
             _FakeComponentBatch("rerun.components.AnnotationContextIndicator", [None]),
@@ -98,8 +103,58 @@ class _FakeAnnotationContext:
 def _build_fake_rerun(calls: dict[str, Any]) -> Any:
     """Build a fake ``rerun`` module that records every call it receives."""
 
+    class _FakeBlueprintModule:
+        @staticmethod
+        def _part(kind: str, *args: Any, **kwargs: Any) -> dict[str, Any]:
+            return {"kind": kind, "args": args, **kwargs}
+
+        @classmethod
+        def Blueprint(cls, *args: Any, **kwargs: Any) -> dict[str, Any]:
+            return cls._part("Blueprint", *args, **kwargs)
+
+        @classmethod
+        def Spatial3DView(cls, *args: Any, **kwargs: Any) -> dict[str, Any]:
+            return cls._part("Spatial3DView", *args, **kwargs)
+
+        @classmethod
+        def Spatial2DView(cls, *args: Any, **kwargs: Any) -> dict[str, Any]:
+            return cls._part("Spatial2DView", *args, **kwargs)
+
+        @classmethod
+        def TimeSeriesView(cls, *args: Any, **kwargs: Any) -> dict[str, Any]:
+            return cls._part("TimeSeriesView", *args, **kwargs)
+
+        @classmethod
+        def Horizontal(cls, *args: Any, **kwargs: Any) -> dict[str, Any]:
+            return cls._part("Horizontal", *args, **kwargs)
+
+        @classmethod
+        def Vertical(cls, *args: Any, **kwargs: Any) -> dict[str, Any]:
+            return cls._part("Vertical", *args, **kwargs)
+
+        @classmethod
+        def Tabs(cls, *args: Any, **kwargs: Any) -> dict[str, Any]:
+            return cls._part("Tabs", *args, **kwargs)
+
+        @classmethod
+        def ScalarAxis(cls, *args: Any, **kwargs: Any) -> dict[str, Any]:
+            return cls._part("ScalarAxis", *args, **kwargs)
+
+        @classmethod
+        def BlueprintPanel(cls, *args: Any, **kwargs: Any) -> dict[str, Any]:
+            return cls._part("BlueprintPanel", *args, **kwargs)
+
+        @classmethod
+        def SelectionPanel(cls, *args: Any, **kwargs: Any) -> dict[str, Any]:
+            return cls._part("SelectionPanel", *args, **kwargs)
+
+        @classmethod
+        def TimePanel(cls, *args: Any, **kwargs: Any) -> dict[str, Any]:
+            return cls._part("TimePanel", *args, **kwargs)
+
     class _FakeRR:
         AnnotationContext = _FakeAnnotationContext
+        blueprint = _FakeBlueprintModule
 
         class TransformRelation:
             ChildFromParent = "ChildFromParent"
@@ -121,6 +176,10 @@ def _build_fake_rerun(calls: dict[str, Any]) -> Any:
             calls["logs"].append((path, payload, kwargs))
 
         @staticmethod
+        def send_blueprint(payload: Any, **kwargs: Any) -> None:
+            calls["blueprints"].append((payload, kwargs))
+
+        @staticmethod
         def AnnotationInfo(**kwargs: Any) -> dict[str, Any]:
             return kwargs
 
@@ -129,11 +188,15 @@ def _build_fake_rerun(calls: dict[str, Any]) -> Any:
             return ("Image", image)
 
         @staticmethod
-        def Points3D(*args: Any, **kwargs: Any) -> tuple[str, tuple[Any, ...], dict[str, Any]]:
+        def Points3D(
+            *args: Any, **kwargs: Any
+        ) -> tuple[str, tuple[Any, ...], dict[str, Any]]:
             return ("Points3D", args, kwargs)
 
         @staticmethod
-        def Points2D(*args: Any, **kwargs: Any) -> tuple[str, tuple[Any, ...], dict[str, Any]]:
+        def Points2D(
+            *args: Any, **kwargs: Any
+        ) -> tuple[str, tuple[Any, ...], dict[str, Any]]:
             return ("Points2D", args, kwargs)
 
         @staticmethod
@@ -162,7 +225,13 @@ def _build_fake_rerun(calls: dict[str, Any]) -> Any:
 @pytest.fixture
 def rerun_calls(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     """Install a fake ``rerun`` module and return its recorded calls."""
-    calls: dict[str, Any] = {"init": None, "serve_web": None, "logs": [], "steps": []}
+    calls: dict[str, Any] = {
+        "init": None,
+        "serve_web": None,
+        "logs": [],
+        "steps": [],
+        "blueprints": [],
+    }
     monkeypatch.setattr(
         "autoware_ml.visualization.rerun_backend._load_rerun_module",
         lambda: _build_fake_rerun(calls),
@@ -229,9 +298,13 @@ def test_backend_uses_the_supported_scalars_api(
     backend: RerunVisualizationBackend, rerun_calls: dict[str, Any]
 ) -> None:
     """``rr.Scalar`` is deprecated since rerun 0.23, so ``rr.Scalars`` must be used."""
-    backend.log_event(ScalarEvent(path="detection3d/metrics/num_predictions", value=4.0))
+    backend.log_event(
+        ScalarEvent(path="scene/metrics/detection/num_predictions", value=4.0)
+    )
 
-    assert _logged(rerun_calls, "detection3d/metrics/num_predictions") == [("Scalars", 4.0)]
+    assert _logged(rerun_calls, "scene/metrics/detection/num_predictions") == [
+        ("Scalars", 4.0)
+    ]
 
 
 def test_backend_translates_every_supported_event(
@@ -239,22 +312,31 @@ def test_backend_translates_every_supported_event(
 ) -> None:
     backend.log_events(
         [
-            ImageEvent(path="cameras/front", image=np.zeros((4, 4, 3), dtype=np.uint8)),
-            PointCloud3DEvent(path="lidar/points", positions=np.zeros((2, 3), dtype=np.float32)),
-            Points2DEvent(path="cameras/front/overlay", positions=np.zeros((2, 2), np.float32)),
+            ImageEvent(
+                path="scene/cameras/front",
+                image=np.zeros((4, 4, 3), dtype=np.uint8),
+            ),
+            PointCloud3DEvent(
+                path="scene/lidar/solid",
+                positions=np.zeros((2, 3), dtype=np.float32),
+            ),
+            Points2DEvent(
+                path="scene/cameras/front/overlay",
+                positions=np.zeros((2, 2), np.float32),
+            ),
             Boxes3DEvent(
-                path="detection3d/prediction",
+                path="scene/prediction/detections",
                 centers=np.zeros((1, 3), dtype=np.float32),
                 sizes=np.ones((1, 3), dtype=np.float32),
                 yaws=np.zeros((1,), dtype=np.float32),
             ),
             Transform3DEvent(
-                path="cameras/front",
+                path="scene/cameras/front",
                 translation=np.zeros((3,), dtype=np.float32),
                 rotation_matrix=np.eye(3, dtype=np.float32),
             ),
             PinholeEvent(
-                path="cameras/front",
+                path="scene/cameras/front",
                 image_from_camera=np.eye(3, dtype=np.float32),
                 resolution=(64, 36),
             ),
@@ -272,6 +354,58 @@ def test_backend_translates_every_supported_event(
         "Pinhole",
         "TextLog",
     ]
+    assert rerun_calls["blueprints"]
+
+
+def test_backend_builds_named_comparison_views_without_root_origins(
+    backend: RerunVisualizationBackend, rerun_calls: dict[str, Any]
+) -> None:
+    backend.log_events(
+        [
+            PointCloud3DEvent(
+                path="scene/prediction/segmentation",
+                positions=np.zeros((2, 3), dtype=np.float32),
+            ),
+            PointCloud3DEvent(
+                path="scene/ground_truth/segmentation",
+                positions=np.zeros((2, 3), dtype=np.float32),
+            ),
+            PointCloud3DEvent(
+                path="scene/lidar/intensity",
+                positions=np.zeros((2, 3), dtype=np.float32),
+            ),
+            PointCloud3DEvent(
+                path="scene/prediction/entropy",
+                positions=np.zeros((2, 3), dtype=np.float32),
+            ),
+            Boxes3DEvent(
+                path="scene/prediction/detections",
+                centers=np.zeros((1, 3), dtype=np.float32),
+                sizes=np.ones((1, 3), dtype=np.float32),
+                yaws=np.zeros((1,), dtype=np.float32),
+            ),
+            Boxes3DEvent(
+                path="scene/ground_truth/detections",
+                centers=np.zeros((1, 3), dtype=np.float32),
+                sizes=np.ones((1, 3), dtype=np.float32),
+                yaws=np.zeros((1,), dtype=np.float32),
+            ),
+            ScalarEvent(path="scene/metrics/detection/precision", value=1.0),
+            ScalarEvent(path="scene/metrics/detection/recall", value=1.0),
+            ScalarEvent(path="scene/metrics/detection/mean_matched_iou", value=1.0),
+        ]
+    )
+
+    blueprint, options = rerun_calls["blueprints"][-1]
+    serialized = repr(blueprint)
+    assert options == {"make_active": True, "make_default": True}
+    assert "GT · Semantic" in serialized
+    assert "Prediction · Semantic" in serialized
+    assert "GT · Intensity" in serialized
+    assert "Prediction · Entropy" in serialized
+    assert "3D IoU quality" in serialized
+    assert "'origin': '/'" not in serialized
+    assert "'auto_views': False" in serialized
 
 
 def test_backend_converts_yaw_to_a_z_axis_quaternion(
@@ -279,7 +413,7 @@ def test_backend_converts_yaw_to_a_z_axis_quaternion(
 ) -> None:
     backend.log_event(
         Boxes3DEvent(
-            path="detection3d/prediction",
+            path="scene/prediction/detections",
             centers=np.zeros((1, 3), dtype=np.float32),
             sizes=np.ones((1, 3), dtype=np.float32),
             yaws=np.array([np.pi / 2], dtype=np.float32),
@@ -303,7 +437,15 @@ def test_verify_annotation_context_support_raises_when_legends_are_dropped(
 ) -> None:
     """A silently emptied AnnotationContext must fail loudly, not lose the legend."""
     monkeypatch.setattr(_FakeAnnotationContext, "serializes_empty", True)
-    fake_rerun = _build_fake_rerun({"init": None, "serve_web": None, "logs": [], "steps": []})
+    fake_rerun = _build_fake_rerun(
+        {
+            "init": None,
+            "serve_web": None,
+            "logs": [],
+            "steps": [],
+            "blueprints": [],
+        }
+    )
 
     with pytest.raises(RuntimeError, match="discarded a probe AnnotationContext"):
         _verify_annotation_context_support(fake_rerun)

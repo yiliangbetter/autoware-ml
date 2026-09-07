@@ -25,15 +25,13 @@ from autoware_ml.visualization.colors import build_label_palette, labels_to_colo
 from autoware_ml.visualization.common import (
     as_numpy,
     build_class_annotation_context,
+    build_lidar_reference_events,
     build_sample_metadata_events,
-    ensure_xyz,
     format_class_label,
-    point_cloud_colors,
     resolve_palette_size,
 )
 from autoware_ml.visualization.events import (
     Boxes3DEvent,
-    PointCloud3DEvent,
     ScalarEvent,
     VisualizationEvent,
 )
@@ -52,7 +50,7 @@ def build_detection3d_data_events(
     gt_boxes: Any,
     gt_labels: Any,
     class_names: Sequence[str] | None = None,
-    root_path: str = "detection3d",
+    root_path: str = "scene",
     point_radius: float = 0.04,
     sample_name: str | None = None,
     point_color_mode: str = "semantic",
@@ -71,20 +69,17 @@ def build_detection3d_data_events(
     events: list[VisualizationEvent] = build_sample_metadata_events(
         root_path, sample_name
     )
-    annotation_context = build_class_annotation_context(root_path, palette, class_names)
+    ground_truth_path = f"{root_path}/ground_truth/detections"
+    annotation_context = build_class_annotation_context(
+        ground_truth_path, palette, class_names
+    )
     if annotation_context is not None:
         events.insert(0, annotation_context)
 
     if points is not None:
-        point_positions = ensure_xyz(points)
-        events.append(
-            PointCloud3DEvent(
-                path=f"{root_path}/points",
-                positions=point_positions,
-                colors=point_cloud_colors(points, point_color_mode),
-                radii=np.full(
-                    (point_positions.shape[0],), point_radius, dtype=np.float32
-                ),
+        events.extend(
+            build_lidar_reference_events(
+                points, root_path=root_path, point_radius=point_radius
             )
         )
 
@@ -93,7 +88,7 @@ def build_detection3d_data_events(
     ]
     events.append(
         Boxes3DEvent(
-            path=f"{root_path}/ground_truth",
+            path=ground_truth_path,
             centers=gt_boxes_np[:, :3],
             sizes=gt_boxes_np[:, 3:6],
             yaws=gt_boxes_np[:, 6],
@@ -104,7 +99,7 @@ def build_detection3d_data_events(
     )
     events.append(
         ScalarEvent(
-            path=f"{root_path}/metrics/num_ground_truth",
+            path=f"{root_path}/metrics/detection/num_ground_truth",
             value=float(gt_boxes_np.shape[0]),
         )
     )
@@ -144,7 +139,7 @@ def build_detection3d_events(
     gt_boxes: Any | None = None,
     gt_labels: Any | None = None,
     class_names: Sequence[str] | None = None,
-    root_path: str = "detection3d",
+    root_path: str = "scene",
     point_radius: float = 0.04,
     sample_name: str | None = None,
     point_color_mode: str = "semantic",
@@ -164,20 +159,19 @@ def build_detection3d_events(
     events: list[VisualizationEvent] = build_sample_metadata_events(
         root_path, sample_name
     )
-    annotation_context = build_class_annotation_context(root_path, palette, class_names)
-    if annotation_context is not None:
-        events.insert(0, annotation_context)
+    prediction_path = f"{root_path}/prediction/detections"
+    ground_truth_path = f"{root_path}/ground_truth/detections"
+    for detections_path in (prediction_path, ground_truth_path):
+        annotation_context = build_class_annotation_context(
+            detections_path, palette, class_names
+        )
+        if annotation_context is not None:
+            events.append(annotation_context)
 
     if points is not None:
-        point_positions = ensure_xyz(points)
-        events.append(
-            PointCloud3DEvent(
-                path=f"{root_path}/points",
-                positions=point_positions,
-                colors=point_cloud_colors(points, point_color_mode),
-                radii=np.full(
-                    (point_positions.shape[0],), point_radius, dtype=np.float32
-                ),
+        events.extend(
+            build_lidar_reference_events(
+                points, root_path=root_path, point_radius=point_radius
             )
         )
 
@@ -190,7 +184,7 @@ def build_detection3d_events(
     ]
     events.append(
         Boxes3DEvent(
-            path=f"{root_path}/prediction",
+            path=prediction_path,
             centers=pred_boxes[:, :3],
             sizes=pred_boxes[:, 3:6],
             yaws=pred_boxes[:, 6],
@@ -201,14 +195,14 @@ def build_detection3d_events(
     )
     events.append(
         ScalarEvent(
-            path=f"{root_path}/metrics/num_predictions",
+            path=f"{root_path}/metrics/detection/num_predictions",
             value=float(pred_boxes.shape[0]),
         )
     )
     if pred_scores.size > 0:
         events.append(
             ScalarEvent(
-                path=f"{root_path}/metrics/mean_score",
+                path=f"{root_path}/metrics/detection/mean_score",
                 value=float(pred_scores.mean()),
             )
         )
@@ -226,7 +220,7 @@ def build_detection3d_events(
         ]
         events.append(
             Boxes3DEvent(
-                path=f"{root_path}/ground_truth",
+                path=ground_truth_path,
                 centers=gt_boxes_np[:, :3],
                 sizes=gt_boxes_np[:, 3:6],
                 yaws=gt_boxes_np[:, 6],
@@ -237,7 +231,7 @@ def build_detection3d_events(
         )
         events.append(
             ScalarEvent(
-                path=f"{root_path}/metrics/num_ground_truth",
+                path=f"{root_path}/metrics/detection/num_ground_truth",
                 value=float(gt_boxes_np.shape[0]),
             )
         )
@@ -245,7 +239,9 @@ def build_detection3d_events(
             pred_boxes, pred_labels, gt_boxes_np, gt_labels_np
         ).items():
             events.append(
-                ScalarEvent(f"{root_path}/metrics/{metric_name}", metric_value)
+                ScalarEvent(
+                    f"{root_path}/metrics/detection/{metric_name}", metric_value
+                )
             )
 
     return events

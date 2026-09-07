@@ -51,13 +51,17 @@ def test_session_forwards_steps_and_events(recording_backend: RecordingBackend) 
 
 
 def test_session_from_config_builds_the_configured_backend() -> None:
-    session = VisualizationSession.from_config(VisualizationSessionConfig(backend="noop"))
+    session = VisualizationSession.from_config(
+        VisualizationSessionConfig(backend="noop")
+    )
 
     session.set_step(0)
     session.log_detection3d(_EMPTY_DETECTION)
 
 
-def test_session_logs_detection_ground_truth(recording_backend: RecordingBackend) -> None:
+def test_session_logs_detection_ground_truth(
+    recording_backend: RecordingBackend,
+) -> None:
     session = VisualizationSession(recording_backend)
 
     session.log_detection3d_data(
@@ -67,10 +71,12 @@ def test_session_logs_detection_ground_truth(recording_backend: RecordingBackend
         class_names=["pedestrian", "car"],
     )
 
-    assert recording_backend.paths_of(Boxes3DEvent) == ["detection3d/ground_truth"]
+    assert recording_backend.paths_of(Boxes3DEvent) == ["scene/ground_truth/detections"]
 
 
-def test_session_logs_segmentation_predictions(recording_backend: RecordingBackend) -> None:
+def test_session_logs_segmentation_predictions(
+    recording_backend: RecordingBackend,
+) -> None:
     session = VisualizationSession(recording_backend)
 
     session.log_segmentation3d(
@@ -80,10 +86,10 @@ def test_session_logs_segmentation_predictions(recording_backend: RecordingBacke
         class_names=["road", "car"],
     )
 
-    assert recording_backend.paths_of(PointCloud3DEvent) == [
-        "segmentation3d/prediction",
-        "segmentation3d/ground_truth",
-    ]
+    point_paths = recording_backend.paths_of(PointCloud3DEvent)
+    assert "scene/prediction/segmentation" in point_paths
+    assert "scene/ground_truth/segmentation" in point_paths
+    assert "scene/lidar/intensity" in point_paths
 
 
 def test_session_logs_segmentation_data(recording_backend: RecordingBackend) -> None:
@@ -95,7 +101,9 @@ def test_session_logs_segmentation_data(recording_backend: RecordingBackend) -> 
         class_names=["road", "car"],
     )
 
-    assert recording_backend.paths_of(PointCloud3DEvent) == ["segmentation3d/data"]
+    assert "scene/ground_truth/segmentation" in recording_backend.paths_of(
+        PointCloud3DEvent
+    )
 
 
 def test_session_logs_calibration_status(
@@ -122,4 +130,7 @@ def test_session_logs_multiview_cameras(
 
     session.log_cameras({"CAM_FRONT": camera, "CAM_BACK": camera})
 
-    assert recording_backend.paths_of(ImageEvent) == ["cameras/CAM_FRONT", "cameras/CAM_BACK"]
+    assert recording_backend.paths_of(ImageEvent) == [
+        "scene/cameras/CAM_FRONT",
+        "scene/cameras/CAM_BACK",
+    ]

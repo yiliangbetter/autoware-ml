@@ -35,6 +35,7 @@ class VisualizationSessionConfig:
     wait: bool = True
     server_memory_limit: str = "25%"
     timeline: str = "frame"
+    point_color_mode: Literal["semantic", "intensity", "solid"] = "semantic"
 
 
 class VisualizationBackend(Protocol):

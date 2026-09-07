@@ -106,3 +106,4 @@ def test_build_preview_config_maps_every_visualization_override() -> None:
     assert config.session.wait is False
     assert config.session.server_memory_limit == "10%"
     assert config.session.timeline == "sample"
+    assert config.session.point_color_mode == "semantic"

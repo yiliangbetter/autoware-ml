@@ -63,20 +63,22 @@ def test_build_camera_events_emits_one_triplet_per_camera(camera_image: Path) ->
     )
 
     assert [event.path for event in events if isinstance(event, Transform3DEvent)] == [
-        "cameras/CAM_FRONT",
-        "cameras/CAM_BACK",
+        "scene/cameras/CAM_FRONT",
+        "scene/cameras/CAM_BACK",
     ]
     assert [event.path for event in events if isinstance(event, PinholeEvent)] == [
-        "cameras/CAM_FRONT",
-        "cameras/CAM_BACK",
+        "scene/cameras/CAM_FRONT",
+        "scene/cameras/CAM_BACK",
     ]
     assert [event.path for event in events if isinstance(event, ImageEvent)] == [
-        "cameras/CAM_FRONT",
-        "cameras/CAM_BACK",
+        "scene/cameras/CAM_FRONT",
+        "scene/cameras/CAM_BACK",
     ]
 
 
-def test_build_camera_events_reads_resolution_from_the_image(camera_image: Path) -> None:
+def test_build_camera_events_reads_resolution_from_the_image(
+    camera_image: Path,
+) -> None:
     events = build_camera_events({"CAM_FRONT": _camera_entry(camera_image)})
 
     pinhole = next(event for event in events if isinstance(event, PinholeEvent))
@@ -94,7 +96,9 @@ def test_build_camera_events_splits_the_extrinsic_into_rotation_and_translation(
 
 
 def test_build_camera_events_honors_the_root_path(camera_image: Path) -> None:
-    events = build_camera_events({"CAM_FRONT": _camera_entry(camera_image)}, root_path="multiview")
+    events = build_camera_events(
+        {"CAM_FRONT": _camera_entry(camera_image)}, root_path="multiview"
+    )
 
     assert all(event.path == "multiview/CAM_FRONT" for event in events)
 

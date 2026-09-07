@@ -98,6 +98,7 @@ def _build_preview_config(cfg: DictConfig) -> VisualizationPreviewConfig:
                 visualization_cfg.get("server_memory_limit", "25%")
             ),
             timeline=str(visualization_cfg.get("timeline", "frame")),
+            point_color_mode=str(visualization_cfg.get("point_color_mode", "semantic")),
         ),
     )
 

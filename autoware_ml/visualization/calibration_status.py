@@ -16,6 +16,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 import cv2
 import numpy as np
 
@@ -44,7 +46,9 @@ _STATUS_TEXT = {
 }
 
 
-def _fused_channel_points(fused_image: Any, channel: int) -> tuple[np.ndarray, np.ndarray]:
+def _fused_channel_points(
+    fused_image: Any, channel: int
+) -> tuple[np.ndarray, np.ndarray]:
     """Extract nonzero normalized BGRDI pixels as a 2D heatmap point overlay."""
     array = as_numpy(fused_image)
     if array.ndim != 3:
@@ -109,7 +113,9 @@ def _project_points_to_image(
     point_depths = point_depths[in_frame_mask]
 
     if projected_points.shape[0] > max_points:
-        keep_indices = np.linspace(0, projected_points.shape[0] - 1, num=max_points, dtype=np.int64)
+        keep_indices = np.linspace(
+            0, projected_points.shape[0] - 1, num=max_points, dtype=np.int64
+        )
         projected_points = projected_points[keep_indices]
         point_depths = point_depths[keep_indices]
 
@@ -149,9 +155,13 @@ def build_calibration_status_events(
     root_path: str = "calibration_status",
 ) -> list[VisualizationEvent]:
     """Build backend-neutral calibration visualization events for one sample."""
-    events: list[VisualizationEvent] = build_sample_metadata_events(root_path, sample_name)
+    events: list[VisualizationEvent] = build_sample_metadata_events(
+        root_path, sample_name
+    )
 
-    transform = calibration_data.lidar_to_camera_transformation.astype(np.float32, copy=False)
+    transform = calibration_data.lidar_to_camera_transformation.astype(
+        np.float32, copy=False
+    )
     events.append(
         Transform3DEvent(
             path=f"{root_path}/camera",
@@ -165,7 +175,9 @@ def build_calibration_status_events(
         events.append(
             PinholeEvent(
                 path=f"{root_path}/camera",
-                image_from_camera=calibration_data.new_camera_matrix.astype(np.float32, copy=False),
+                image_from_camera=calibration_data.new_camera_matrix.astype(
+                    np.float32, copy=False
+                ),
                 resolution=(int(image_uint8.shape[1]), int(image_uint8.shape[0])),
             )
         )
@@ -179,7 +191,9 @@ def build_calibration_status_events(
             )
             if projected_points.shape[0] > 0:
                 overlay_colors = depths_to_colors(point_depths)
-                overlay_radii = np.full((projected_points.shape[0],), 2.0, dtype=np.float32)
+                overlay_radii = np.full(
+                    (projected_points.shape[0],), 2.0, dtype=np.float32
+                )
                 events.append(
                     Points2DEvent(
                         path=f"{root_path}/camera/image/projected_points",
@@ -215,7 +229,9 @@ def build_calibration_status_events(
                     f"{fused_path}/intensity",
                     positions=intensity_positions,
                     colors=intensity_colors,
-                    radii=np.full((intensity_positions.shape[0],), 2.0, dtype=np.float32),
+                    radii=np.full(
+                        (intensity_positions.shape[0],), 2.0, dtype=np.float32
+                    ),
                 )
             )
 
@@ -226,7 +242,10 @@ def build_calibration_status_events(
     if gt_status is not None:
         events.append(ScalarEvent(f"{root_path}/status/gt", float(gt_status)))
         events.append(
-            TextEvent(f"{root_path}/status/gt_label", _STATUS_TEXT.get(gt_status, str(gt_status)))
+            TextEvent(
+                f"{root_path}/status/gt_label",
+                _STATUS_TEXT.get(gt_status, str(gt_status)),
+            )
         )
 
     if pred_status is not None:
