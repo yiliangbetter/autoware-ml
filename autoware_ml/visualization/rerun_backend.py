@@ -29,6 +29,7 @@ from autoware_ml.visualization.common import POINT_COLOR_MODES
 from autoware_ml.visualization.events import (
     AnnotationContextEvent,
     Boxes3DEvent,
+    ClearEvent,
     ImageEvent,
     PinholeEvent,
     PointCloud3DEvent,
@@ -112,9 +113,7 @@ def _yaw_to_quaternions(yaws: np.ndarray) -> np.ndarray:
 class _RerunVisualizationBackendBase:
     """Shared Rerun event translation."""
 
-    def _initialize_recording(
-        self, config: VisualizationSessionConfig, *, spawn: bool
-    ) -> None:
+    def _initialize_recording(self, config: VisualizationSessionConfig, *, spawn: bool) -> None:
         """Initialize one Rerun recording."""
         self.timeline = config.timeline
         self.rr = _load_rerun_module()
@@ -127,9 +126,7 @@ class _RerunVisualizationBackendBase:
         )
         self._fused_blueprint_sent = False
         if config.point_color_mode not in POINT_COLOR_MODES:
-            raise ValueError(
-                "point color mode must be 'semantic', 'intensity', or 'solid'"
-            )
+            raise ValueError("point color mode must be 'semantic', 'intensity', or 'solid'")
         self.point_color_mode = config.point_color_mode
         self._observed_paths: set[str] = set()
         self._camera_paths: set[str] = set()
@@ -141,6 +138,10 @@ class _RerunVisualizationBackendBase:
     def set_step(self, step: int) -> None:
         """Advance the rerun timeline to one integer step."""
         self.rr.set_time(self.timeline, sequence=int(step))
+
+    def set_timestamp(self, timestamp: float) -> None:
+        """Set the source sensor time on a second, timestamp-valued timeline."""
+        self.rr.set_time("sensor_time", timestamp=float(timestamp))
 
     def log_event(self, event: VisualizationEvent) -> None:
         """Translate one visualization event into rerun entities."""
@@ -241,6 +242,10 @@ class _RerunVisualizationBackendBase:
             self.rr.log(event.path, self.rr.TextLog(event.text, level=event.level))
             return
 
+        if isinstance(event, ClearEvent):
+            self.rr.log(event.path, self.rr.Clear(recursive=event.recursive))
+            return
+
         raise TypeError(f"Unsupported visualization event: {type(event)!r}")
 
     def _send_fused_blueprint_if_needed(self, events: list[VisualizationEvent]) -> None:
@@ -331,9 +336,7 @@ class _RerunVisualizationBackendBase:
                     name="3D IoU quality",
                     origin=metrics_root,
                     contents=quality_paths,
-                    axis_y=self.rr.blueprint.ScalarAxis(
-                        range=(0.0, 1.0), zoom_lock=True
-                    ),
+                    axis_y=self.rr.blueprint.ScalarAxis(range=(0.0, 1.0), zoom_lock=True),
                 )
             )
         if count_paths:
@@ -414,13 +417,9 @@ class _RerunVisualizationBackendBase:
     def _send_scene_blueprint_if_needed(self) -> None:
         """Publish a requirements-driven scene blueprint as entities appear."""
         scene_paths = frozenset(
-            path
-            for path in self._observed_paths
-            if path == "scene" or path.startswith("scene/")
+            path for path in self._observed_paths if path == "scene" or path.startswith("scene/")
         )
-        signature = scene_paths | frozenset(
-            f"@camera:{path}" for path in self._camera_paths
-        )
+        signature = scene_paths | frozenset(f"@camera:{path}" for path in self._camera_paths)
         if not scene_paths or signature == self._scene_blueprint_signature:
             return
 

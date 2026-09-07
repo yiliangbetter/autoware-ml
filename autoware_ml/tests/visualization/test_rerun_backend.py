@@ -27,6 +27,7 @@ from autoware_ml.visualization.events import (
     AnnotationContextEvent,
     AnnotationInfo,
     Boxes3DEvent,
+    ClearEvent,
     ImageEvent,
     PinholeEvent,
     PointCloud3DEvent,
@@ -87,12 +88,7 @@ class _FakeAnnotationContext:
         payload: Any = (
             [[]]
             if type(self).serializes_empty
-            else [
-                [
-                    {"class_id": info["id"], "label": info["label"]}
-                    for info in self.context
-                ]
-            ]
+            else [[{"class_id": info["id"], "label": info["label"]} for info in self.context]]
         )
         return [
             _FakeComponentBatch("rerun.components.AnnotationContextIndicator", [None]),
@@ -168,8 +164,13 @@ def _build_fake_rerun(calls: dict[str, Any]) -> Any:
             calls["serve_web"] = kwargs
 
         @staticmethod
-        def set_time(timeline: str, *, sequence: int) -> None:
-            calls["steps"].append((timeline, sequence))
+        def set_time(
+            timeline: str,
+            *,
+            sequence: int | None = None,
+            timestamp: float | None = None,
+        ) -> None:
+            calls["times"].append((timeline, sequence, timestamp))
 
         @staticmethod
         def log(path: str, payload: Any, **kwargs: Any) -> None:
@@ -188,15 +189,11 @@ def _build_fake_rerun(calls: dict[str, Any]) -> Any:
             return ("Image", image)
 
         @staticmethod
-        def Points3D(
-            *args: Any, **kwargs: Any
-        ) -> tuple[str, tuple[Any, ...], dict[str, Any]]:
+        def Points3D(*args: Any, **kwargs: Any) -> tuple[str, tuple[Any, ...], dict[str, Any]]:
             return ("Points3D", args, kwargs)
 
         @staticmethod
-        def Points2D(
-            *args: Any, **kwargs: Any
-        ) -> tuple[str, tuple[Any, ...], dict[str, Any]]:
+        def Points2D(*args: Any, **kwargs: Any) -> tuple[str, tuple[Any, ...], dict[str, Any]]:
             return ("Points2D", args, kwargs)
 
         @staticmethod
@@ -219,6 +216,10 @@ def _build_fake_rerun(calls: dict[str, Any]) -> Any:
         def TextLog(text: str, **kwargs: Any) -> tuple[str, str, dict[str, Any]]:
             return ("TextLog", text, kwargs)
 
+        @staticmethod
+        def Clear(**kwargs: Any) -> tuple[str, dict[str, Any]]:
+            return ("Clear", kwargs)
+
     return _FakeRR
 
 
@@ -229,7 +230,7 @@ def rerun_calls(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
         "init": None,
         "serve_web": None,
         "logs": [],
-        "steps": [],
+        "times": [],
         "blueprints": [],
     }
     monkeypatch.setattr(
@@ -272,8 +273,12 @@ def test_backend_forwards_timeline_steps(
     backend: RerunVisualizationBackend, rerun_calls: dict[str, Any]
 ) -> None:
     backend.set_step(3)
+    backend.set_timestamp(12.5)
 
-    assert rerun_calls["steps"] == [("frame", 3)]
+    assert rerun_calls["times"] == [
+        ("frame", 3, None),
+        ("sensor_time", None, 12.5),
+    ]
 
 
 def test_backend_logs_annotation_context_statically(
@@ -298,13 +303,9 @@ def test_backend_uses_the_supported_scalars_api(
     backend: RerunVisualizationBackend, rerun_calls: dict[str, Any]
 ) -> None:
     """``rr.Scalar`` is deprecated since rerun 0.23, so ``rr.Scalars`` must be used."""
-    backend.log_event(
-        ScalarEvent(path="scene/metrics/detection/num_predictions", value=4.0)
-    )
+    backend.log_event(ScalarEvent(path="scene/metrics/detection/num_predictions", value=4.0))
 
-    assert _logged(rerun_calls, "scene/metrics/detection/num_predictions") == [
-        ("Scalars", 4.0)
-    ]
+    assert _logged(rerun_calls, "scene/metrics/detection/num_predictions") == [("Scalars", 4.0)]
 
 
 def test_backend_translates_every_supported_event(
@@ -341,6 +342,7 @@ def test_backend_translates_every_supported_event(
                 resolution=(64, 36),
             ),
             TextEvent(path="meta/sample", text="sample-1"),
+            ClearEvent(path="scene/ground_truth"),
         ]
     )
 
@@ -353,6 +355,7 @@ def test_backend_translates_every_supported_event(
         "Transform3D",
         "Pinhole",
         "TextLog",
+        "Clear",
     ]
     assert rerun_calls["blueprints"]
 
@@ -442,7 +445,7 @@ def test_verify_annotation_context_support_raises_when_legends_are_dropped(
             "init": None,
             "serve_web": None,
             "logs": [],
-            "steps": [],
+            "times": [],
             "blueprints": [],
         }
     )

@@ -44,6 +44,9 @@ class VisualizationBackend(Protocol):
     def set_step(self, step: int) -> None:
         """Advance the backend timeline to one integer step."""
 
+    def set_timestamp(self, timestamp: float) -> None:
+        """Set the sensor timestamp for the current frame."""
+
     def log_event(self, event: VisualizationEvent) -> None:
         """Log one visualization event."""
 

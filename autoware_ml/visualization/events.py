@@ -130,6 +130,14 @@ class TextEvent:
     level: Literal["TRACE", "DEBUG", "INFO", "WARN", "ERROR"] = "INFO"
 
 
+@dataclass(frozen=True)
+class ClearEvent:
+    """Clear current and historical components from an entity path."""
+
+    path: str
+    recursive: bool = True
+
+
 VisualizationEvent: TypeAlias = (
     AnnotationContextEvent
     | ImageEvent
@@ -140,4 +148,5 @@ VisualizationEvent: TypeAlias = (
     | PinholeEvent
     | ScalarEvent
     | TextEvent
+    | ClearEvent
 )

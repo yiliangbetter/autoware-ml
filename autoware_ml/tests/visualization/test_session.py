@@ -26,6 +26,7 @@ from autoware_ml.utils.calibration import CalibrationData
 from autoware_ml.visualization.contracts import VisualizationSessionConfig
 from autoware_ml.visualization.events import (
     Boxes3DEvent,
+    ClearEvent,
     ImageEvent,
     PointCloud3DEvent,
     Transform3DEvent,
@@ -50,10 +51,27 @@ def test_session_forwards_steps_and_events(recording_backend: RecordingBackend) 
     assert recording_backend.events
 
 
+def test_session_begins_replacement_frame_and_forwards_timestamp(
+    recording_backend: RecordingBackend,
+) -> None:
+    session = VisualizationSession(recording_backend)
+
+    session.begin_frame(70, timestamp=12.5)
+
+    assert recording_backend.steps == [70]
+    assert recording_backend.timestamps == [12.5]
+    assert recording_backend.paths_of(ClearEvent) == [
+        "scene/lidar",
+        "scene/prediction",
+        "scene/ground_truth",
+        "scene/cameras",
+        "scene/meta",
+    ]
+    assert all(event.recursive for event in recording_backend.events)
+
+
 def test_session_from_config_builds_the_configured_backend() -> None:
-    session = VisualizationSession.from_config(
-        VisualizationSessionConfig(backend="noop")
-    )
+    session = VisualizationSession.from_config(VisualizationSessionConfig(backend="noop"))
 
     session.set_step(0)
     session.log_detection3d(_EMPTY_DETECTION)
@@ -101,9 +119,7 @@ def test_session_logs_segmentation_data(recording_backend: RecordingBackend) -> 
         class_names=["road", "car"],
     )
 
-    assert "scene/ground_truth/segmentation" in recording_backend.paths_of(
-        PointCloud3DEvent
-    )
+    assert "scene/ground_truth/segmentation" in recording_backend.paths_of(PointCloud3DEvent)
 
 
 def test_session_logs_calibration_status(

@@ -35,12 +35,17 @@ class RecordingBackend:
     def __init__(self) -> None:
         """Initialize empty step and event logs."""
         self.steps: list[int] = []
+        self.timestamps: list[float] = []
         self.events: list[Any] = []
         self.waited = False
 
     def set_step(self, step: int) -> None:
         """Record one timeline step."""
         self.steps.append(step)
+
+    def set_timestamp(self, timestamp: float) -> None:
+        """Record one sensor timestamp."""
+        self.timestamps.append(timestamp)
 
     def log_event(self, event: VisualizationEvent) -> None:
         """Record one visualization event."""

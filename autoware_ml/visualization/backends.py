@@ -18,7 +18,10 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 
-from autoware_ml.visualization.contracts import VisualizationBackend, VisualizationSessionConfig
+from autoware_ml.visualization.contracts import (
+    VisualizationBackend,
+    VisualizationSessionConfig,
+)
 from autoware_ml.visualization.events import VisualizationEvent
 
 
@@ -28,6 +31,10 @@ class NoOpVisualizationBackend:
     def set_step(self, step: int) -> None:
         """Ignore timeline updates."""
         del step
+
+    def set_timestamp(self, timestamp: float) -> None:
+        """Ignore sensor timestamp updates."""
+        del timestamp
 
     def log_event(self, event: VisualizationEvent) -> None:
         """Ignore one visualization event."""
