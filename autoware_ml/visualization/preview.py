@@ -416,7 +416,7 @@ def _log_segmentation_data_preview(
         point_labels=config.point_labels,
         sample_name=sample_name,
         point_color_mode=config.point_color_mode,
-        root_path="dataset/segmentation3d",
+        root_path="scene",
     )
     _log_camera_preview(session, raw_info)
 
@@ -436,7 +436,7 @@ def _log_detection_data_preview(
         class_names=_resolve_class_names(config, batch, raw_info, task="detection3d"),
         sample_name=sample_name,
         point_color_mode=config.point_color_mode,
-        root_path="dataset/detection3d",
+        root_path="scene",
     )
     _log_camera_preview(session, raw_info)
 
@@ -471,7 +471,7 @@ def _log_segmentation_preview(
 def _log_camera_preview(
     session: VisualizationSession,
     raw_info: dict[str, Any] | None,
-    root_path: str = "cameras",
+    root_path: str = "scene/cameras",
 ) -> None:
     """Log cameras for a sample using raw dataset info (bypasses collation)."""
     if raw_info is None:
@@ -546,7 +546,7 @@ def _log_multitask_preview(
         point_labels=config.point_labels,
         sample_name=sample_name,
         point_color_mode=config.point_color_mode,
-        root_path="segmentation3d",
+        root_path="scene",
     )
     session.log_detection3d(
         detection_predictions[0],
@@ -556,7 +556,7 @@ def _log_multitask_preview(
         class_names=detection_class_names,
         sample_name=sample_name,
         point_color_mode=config.point_color_mode,
-        root_path="detection3d",
+        root_path="scene",
     )
     _log_camera_preview(session, raw_info)
 

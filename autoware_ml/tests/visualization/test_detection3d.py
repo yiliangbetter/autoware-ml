@@ -88,8 +88,8 @@ def test_build_detection3d_events_logs_boxes_and_points() -> None:
     assert any(isinstance(event, PointCloud3DEvent) for event in events)
     box_events = [event for event in events if isinstance(event, Boxes3DEvent)]
     assert [event.path for event in box_events] == [
-        "detection3d/prediction",
-        "detection3d/ground_truth",
+        "scene/prediction/detections",
+        "scene/ground_truth/detections",
     ]
     assert box_events[0].class_ids is not None
     assert box_events[0].labels == ["car (0.90)"]
@@ -109,11 +109,11 @@ def test_build_detection3d_events_logs_frame_metrics() -> None:
     metrics = {
         event.path: event.value for event in events if isinstance(event, ScalarEvent)
     }
-    assert metrics["detection3d/metrics/num_predictions"] == 1.0
-    assert metrics["detection3d/metrics/num_ground_truth"] == 1.0
-    assert metrics["detection3d/metrics/mean_score"] == pytest.approx(0.9)
-    assert metrics["detection3d/metrics/true_positives"] == 1.0
-    assert metrics["detection3d/metrics/mean_matched_iou"] == pytest.approx(1.0)
+    assert metrics["scene/metrics/detection/num_predictions"] == 1.0
+    assert metrics["scene/metrics/detection/num_ground_truth"] == 1.0
+    assert metrics["scene/metrics/detection/mean_score"] == pytest.approx(0.9)
+    assert metrics["scene/metrics/detection/true_positives"] == 1.0
+    assert metrics["scene/metrics/detection/mean_matched_iou"] == pytest.approx(1.0)
 
 
 def test_detection_iou_matches_same_class_boxes_only() -> None:
@@ -160,7 +160,7 @@ def test_build_detection3d_data_events_logs_ground_truth_only() -> None:
     )
 
     box_events = [event for event in events if isinstance(event, Boxes3DEvent)]
-    assert [event.path for event in box_events] == ["detection3d/ground_truth"]
+    assert [event.path for event in box_events] == ["scene/ground_truth/detections"]
     assert box_events[0].class_ids is not None
 
 

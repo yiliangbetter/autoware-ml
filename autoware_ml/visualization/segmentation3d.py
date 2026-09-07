@@ -29,10 +29,10 @@ from autoware_ml.visualization.colors import (
 from autoware_ml.visualization.common import (
     as_numpy,
     build_class_annotation_context,
+    build_lidar_reference_events,
     build_sample_metadata_events,
     ensure_xyz,
     format_class_label,
-    point_cloud_colors,
     resolve_palette_size,
 )
 from autoware_ml.visualization.events import (
@@ -48,7 +48,7 @@ def build_segmentation3d_data_events(
     *,
     class_names: Sequence[str] | None = None,
     ignore_index: int | None = None,
-    root_path: str = "segmentation3d",
+    root_path: str = "scene",
     point_radius: float = 0.04,
     point_labels: bool = False,
     sample_name: str | None = None,
@@ -66,25 +66,32 @@ def build_segmentation3d_data_events(
     events: list[VisualizationEvent] = build_sample_metadata_events(
         root_path, sample_name
     )
-    annotation_context = build_class_annotation_context(root_path, palette, class_names)
+    semantic_path = f"{root_path}/ground_truth/segmentation"
+    annotation_context = build_class_annotation_context(
+        semantic_path, palette, class_names
+    )
     if annotation_context is not None:
         events.insert(0, annotation_context)
+    events.extend(
+        build_lidar_reference_events(
+            points, root_path=root_path, point_radius=point_radius
+        )
+    )
     events.append(
         PointCloud3DEvent(
-            path=f"{root_path}/data",
+            path=semantic_path,
             positions=point_positions,
-            colors=(
-                point_cloud_colors(points, point_color_mode)
-                if point_color_mode != "semantic"
-                else labels_to_colors(labels_np, palette, ignore_index=ignore_index)
-            ),
+            colors=labels_to_colors(labels_np, palette, ignore_index=ignore_index),
             labels=label_text,
             radii=radii,
             class_ids=labels_np,
         )
     )
     events.append(
-        ScalarEvent(f"{root_path}/metrics/num_points", float(point_positions.shape[0]))
+        ScalarEvent(
+            f"{root_path}/metrics/segmentation/num_points",
+            float(point_positions.shape[0]),
+        )
     )
     return events
 
@@ -97,7 +104,7 @@ def build_segmentation3d_events(
     gt_labels: Any | None = None,
     class_names: Sequence[str] | None = None,
     ignore_index: int | None = None,
-    root_path: str = "segmentation3d",
+    root_path: str = "scene",
     point_radius: float = 0.04,
     point_labels: bool = False,
     sample_name: str | None = None,
@@ -125,12 +132,22 @@ def build_segmentation3d_events(
     events: list[VisualizationEvent] = build_sample_metadata_events(
         root_path, sample_name
     )
-    annotation_context = build_class_annotation_context(root_path, palette, class_names)
-    if annotation_context is not None:
-        events.insert(0, annotation_context)
+    prediction_path = f"{root_path}/prediction/segmentation"
+    ground_truth_path = f"{root_path}/ground_truth/segmentation"
+    for semantic_path in (prediction_path, ground_truth_path):
+        annotation_context = build_class_annotation_context(
+            semantic_path, palette, class_names
+        )
+        if annotation_context is not None:
+            events.append(annotation_context)
+    events.extend(
+        build_lidar_reference_events(
+            points, root_path=root_path, point_radius=point_radius
+        )
+    )
     events.append(
         PointCloud3DEvent(
-            path=f"{root_path}/prediction",
+            path=prediction_path,
             positions=point_positions,
             colors=labels_to_colors(pred_labels_np, palette, ignore_index=ignore_index),
             labels=pred_label_text,
@@ -143,7 +160,7 @@ def build_segmentation3d_events(
         gt_label_text = _build_point_labels(gt_labels_np, class_names, point_labels)
         events.append(
             PointCloud3DEvent(
-                path=f"{root_path}/ground_truth",
+                path=ground_truth_path,
                 positions=point_positions,
                 colors=labels_to_colors(
                     gt_labels_np, palette, ignore_index=ignore_index
@@ -155,7 +172,10 @@ def build_segmentation3d_events(
         )
 
     events.append(
-        ScalarEvent(f"{root_path}/metrics/num_points", float(pred_labels_np.shape[0]))
+        ScalarEvent(
+            f"{root_path}/metrics/segmentation/num_points",
+            float(pred_labels_np.shape[0]),
+        )
     )
     if pred_probs is not None and pred_logits is None:
         pred_probs_np = as_numpy(pred_probs, np.float32)
@@ -163,7 +183,7 @@ def build_segmentation3d_events(
             raise ValueError("pred_probs must have shape (N, C) aligned with points")
         events.append(
             ScalarEvent(
-                path=f"{root_path}/metrics/mean_confidence",
+                path=f"{root_path}/metrics/segmentation/mean_confidence",
                 value=float(pred_probs_np.max(axis=1).mean()),
             )
         )
@@ -173,7 +193,7 @@ def build_segmentation3d_events(
             entropy_norm = (entropy / np.log(num_classes)).astype(np.float32)
             events.append(
                 PointCloud3DEvent(
-                    path=f"{root_path}/entropy",
+                    path=f"{root_path}/prediction/entropy",
                     positions=point_positions,
                     colors=scalar_to_heatmap_colors(entropy_norm),
                     radii=radii,
@@ -190,7 +210,7 @@ def build_segmentation3d_events(
             probabilities /= probabilities.sum(axis=1, keepdims=True)
             events.append(
                 ScalarEvent(
-                    path=f"{root_path}/metrics/mean_confidence",
+                    path=f"{root_path}/metrics/segmentation/mean_confidence",
                     value=float(probabilities.max(axis=1).mean()),
                 )
             )
@@ -199,29 +219,19 @@ def build_segmentation3d_events(
             )
             entropy_norm = (entropy / np.log(logits_np.shape[1])).astype(np.float32)
             events.append(
+                ScalarEvent(
+                    path=f"{root_path}/metrics/segmentation/mean_entropy",
+                    value=float(entropy_norm.mean()),
+                )
+            )
+            events.append(
                 PointCloud3DEvent(
-                    path=f"{root_path}/entropy",
+                    path=f"{root_path}/prediction/entropy",
                     positions=point_positions,
                     colors=scalar_to_heatmap_colors(entropy_norm),
                     radii=radii,
                 )
             )
-
-    if point_color_mode != "semantic":
-        colors = point_cloud_colors(points, point_color_mode)
-        for index, event in enumerate(events):
-            if isinstance(event, PointCloud3DEvent) and event.path in {
-                f"{root_path}/prediction",
-                f"{root_path}/ground_truth",
-            }:
-                events[index] = PointCloud3DEvent(
-                    path=event.path,
-                    positions=event.positions,
-                    colors=colors,
-                    labels=event.labels,
-                    radii=event.radii,
-                    class_ids=event.class_ids,
-                )
 
     return events
 

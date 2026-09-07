@@ -26,9 +26,12 @@ from autoware_ml.visualization.colors import scalar_to_heatmap_colors
 from autoware_ml.visualization.events import (
     AnnotationContextEvent,
     AnnotationInfo,
+    PointCloud3DEvent,
     TextEvent,
     VisualizationEvent,
 )
+
+POINT_COLOR_MODES = frozenset({"semantic", "intensity", "solid"})
 
 
 def as_numpy(data: Any, dtype: np.dtype | None = None) -> np.ndarray:
@@ -54,7 +57,7 @@ def ensure_xyz(points: Any) -> np.ndarray:
 
 def point_cloud_colors(points: Any, mode: str = "semantic") -> np.ndarray | None:
     """Build optional RGBA point colors, including per-frame LiDAR intensity."""
-    if mode not in {"semantic", "intensity", "solid"}:
+    if mode not in POINT_COLOR_MODES:
         raise ValueError("point color mode must be 'semantic', 'intensity', or 'solid'")
     if mode == "semantic":
         return None
@@ -77,6 +80,41 @@ def point_cloud_colors(points: Any, mode: str = "semantic") -> np.ndarray | None
     if high > low:
         normalized = (intensity - low) / (high - low)
     return scalar_to_heatmap_colors(normalized)
+
+
+def build_lidar_reference_events(
+    points: Any,
+    *,
+    root_path: str,
+    point_radius: float,
+) -> list[PointCloud3DEvent]:
+    """Build solid and, when available, intensity LiDAR scene layers.
+
+    Both layers are logged so the viewer can switch coloring modes without
+    rerunning inference. Semantic layers remain task-specific because they
+    carry class ids and annotation contexts.
+    """
+    positions = ensure_xyz(points)
+    radii = np.full((positions.shape[0],), point_radius, dtype=np.float32)
+    events = [
+        PointCloud3DEvent(
+            path=f"{root_path}/lidar/solid",
+            positions=positions,
+            colors=point_cloud_colors(points, "solid"),
+            radii=radii,
+        )
+    ]
+    points_array = as_numpy(points)
+    if points_array.ndim == 2 and points_array.shape[1] >= 4:
+        events.append(
+            PointCloud3DEvent(
+                path=f"{root_path}/lidar/intensity",
+                positions=positions,
+                colors=point_cloud_colors(points, "intensity"),
+                radii=radii,
+            )
+        )
+    return events
 
 
 def ensure_image_uint8(image: Any) -> np.ndarray:

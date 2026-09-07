@@ -43,11 +43,15 @@ def test_build_segmentation3d_events_logs_prediction_and_ground_truth() -> None:
 
     point_events = [event for event in events if isinstance(event, PointCloud3DEvent)]
     point_paths = [event.path for event in point_events]
-    assert "segmentation3d/prediction" in point_paths
-    assert "segmentation3d/ground_truth" in point_paths
+    assert "scene/prediction/segmentation" in point_paths
+    assert "scene/ground_truth/segmentation" in point_paths
+    assert "scene/lidar/intensity" in point_paths
+    assert "scene/lidar/solid" in point_paths
     assert any(isinstance(event, AnnotationContextEvent) for event in events)
 
-    prediction = next(e for e in point_events if e.path == "segmentation3d/prediction")
+    prediction = next(
+        e for e in point_events if e.path == "scene/prediction/segmentation"
+    )
     assert prediction.class_ids is not None
     assert prediction.labels is None
 
@@ -62,13 +66,13 @@ def test_build_segmentation3d_events_logs_entropy_cloud_and_confidence() -> None
     point_paths = [
         event.path for event in events if isinstance(event, PointCloud3DEvent)
     ]
-    assert "segmentation3d/entropy" in point_paths
+    assert "scene/prediction/entropy" in point_paths
 
     metrics = {
         event.path: event.value for event in events if isinstance(event, ScalarEvent)
     }
-    assert metrics["segmentation3d/metrics/num_points"] == 2.0
-    assert metrics["segmentation3d/metrics/mean_confidence"] == pytest.approx(0.9)
+    assert metrics["scene/metrics/segmentation/num_points"] == 2.0
+    assert metrics["scene/metrics/segmentation/mean_confidence"] == pytest.approx(0.9)
 
 
 def test_build_segmentation3d_events_computes_entropy_from_logits() -> None:
@@ -84,6 +88,10 @@ def test_build_segmentation3d_events_computes_entropy_from_logits() -> None:
     )
     assert entropy.colors is not None
     assert entropy.colors.shape == (2, 4)
+    metrics = {
+        event.path: event.value for event in events if isinstance(event, ScalarEvent)
+    }
+    assert metrics["scene/metrics/segmentation/mean_entropy"] < 0.001
 
 
 def test_build_segmentation3d_events_emits_point_labels_on_request() -> None:
@@ -98,7 +106,7 @@ def test_build_segmentation3d_events_emits_point_labels_on_request() -> None:
         event
         for event in events
         if isinstance(event, PointCloud3DEvent)
-        and event.path == "segmentation3d/prediction"
+        and event.path == "scene/prediction/segmentation"
     )
     assert prediction.labels == ["road", "car"]
 
@@ -155,7 +163,11 @@ def test_build_segmentation3d_data_events_logs_single_data_cloud() -> None:
     )
 
     point_events = [event for event in events if isinstance(event, PointCloud3DEvent)]
-    assert [event.path for event in point_events] == ["segmentation3d/data"]
+    assert [event.path for event in point_events] == [
+        "scene/lidar/solid",
+        "scene/lidar/intensity",
+        "scene/ground_truth/segmentation",
+    ]
     assert any(isinstance(event, AnnotationContextEvent) for event in events)
 
 

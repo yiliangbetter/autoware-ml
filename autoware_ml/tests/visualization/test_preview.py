@@ -148,8 +148,8 @@ def test_preview_logs_a_segmentation_sample(preview_session: RecordingBackend) -
 
     assert visualized == 1
     point_paths = preview_session.paths_of(PointCloud3DEvent)
-    assert "segmentation3d/prediction" in point_paths
-    assert "segmentation3d/ground_truth" in point_paths
+    assert "scene/prediction/segmentation" in point_paths
+    assert "scene/ground_truth/segmentation" in point_paths
 
 
 def test_preview_reconstructs_points_for_voxelized_segmentation(
@@ -176,7 +176,7 @@ def test_preview_reconstructs_points_for_voxelized_segmentation(
         event
         for event in preview_session.events
         if isinstance(event, PointCloud3DEvent)
-        and event.path == "segmentation3d/prediction"
+        and event.path == "scene/prediction/segmentation"
     )
     assert prediction.positions.shape == (3, 3)
 
@@ -209,9 +209,9 @@ def test_preview_logs_transformed_voxelized_data_without_a_model(
     )
 
     assert visualized == 1
-    assert preview_session.paths_of(PointCloud3DEvent) == [
-        "dataset/segmentation3d/data"
-    ]
+    assert "scene/ground_truth/segmentation" in preview_session.paths_of(
+        PointCloud3DEvent
+    )
     logged = next(
         event
         for event in preview_session.events
@@ -240,8 +240,8 @@ def test_preview_logs_a_detection_sample(preview_session: RecordingBackend) -> N
 
     assert visualized == 1
     assert preview_session.paths_of(Boxes3DEvent) == [
-        "detection3d/prediction",
-        "detection3d/ground_truth",
+        "scene/prediction/detections",
+        "scene/ground_truth/detections",
     ]
 
 
@@ -336,10 +336,10 @@ def test_preview_logs_transformed_data_without_a_model(
     )
 
     assert visualized == 1
-    assert preview_session.paths_of(PointCloud3DEvent) == [
-        "dataset/segmentation3d/data"
-    ]
-    assert "dataset/segmentation3d/meta/sample" in preview_session.paths_of(TextEvent)
+    assert "scene/ground_truth/segmentation" in preview_session.paths_of(
+        PointCloud3DEvent
+    )
+    assert "scene/meta/sample" in preview_session.paths_of(TextEvent)
 
 
 def test_preview_scrubs_multiple_samples_on_the_shared_timeline(
@@ -487,8 +487,10 @@ def test_preview_routes_a_sample_matching_two_tasks(
     )
 
     assert visualized == 1
-    assert "dataset/segmentation3d/data" in preview_session.paths_of(PointCloud3DEvent)
-    assert "dataset/detection3d/ground_truth" in preview_session.paths_of(Boxes3DEvent)
+    assert "scene/ground_truth/segmentation" in preview_session.paths_of(
+        PointCloud3DEvent
+    )
+    assert "scene/ground_truth/detections" in preview_session.paths_of(Boxes3DEvent)
 
 
 @pytest.mark.parametrize("position_key", ["points", "coord"])

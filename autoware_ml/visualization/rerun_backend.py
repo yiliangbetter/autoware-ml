@@ -25,6 +25,7 @@ from typing import Any
 import numpy as np
 
 from autoware_ml.visualization.contracts import VisualizationSessionConfig
+from autoware_ml.visualization.common import POINT_COLOR_MODES
 from autoware_ml.visualization.events import (
     AnnotationContextEvent,
     Boxes3DEvent,
@@ -125,8 +126,14 @@ class _RerunVisualizationBackendBase:
             spawn=spawn,
         )
         self._fused_blueprint_sent = False
-        self._camera_blueprint_sent = False
-        self._scene_contents: set[str] = set()
+        if config.point_color_mode not in POINT_COLOR_MODES:
+            raise ValueError(
+                "point color mode must be 'semantic', 'intensity', or 'solid'"
+            )
+        self.point_color_mode = config.point_color_mode
+        self._observed_paths: set[str] = set()
+        self._camera_paths: set[str] = set()
+        self._scene_blueprint_signature: frozenset[str] = frozenset()
 
     def wait_until_interrupted(self) -> None:
         """Return immediately because no viewer is served by default."""
@@ -283,43 +290,245 @@ class _RerunVisualizationBackendBase:
         )
         self._fused_blueprint_sent = True
 
-    def _send_camera_blueprint_if_needed(
-        self, events: list[VisualizationEvent]
-    ) -> None:
-        """Create one 3D scene containing LiDAR, boxes, and camera frustums."""
-        if self._camera_blueprint_sent or not any(
-            isinstance(event, PinholeEvent) for event in events
-        ):
-            return
-        contents = sorted(self._scene_contents)
-        scene_origin = next(
-            (path for path in ("detection3d", "segmentation3d") if path in contents),
-            contents[0],
+    def _scene_view(
+        self,
+        *,
+        name: str,
+        point_path: str | None,
+        detection_path: str | None,
+    ) -> Any:
+        """Build one explicit scene view with camera frustums overlaid."""
+        contents = []
+        if point_path is not None and point_path in self._observed_paths:
+            contents.append(point_path)
+        if detection_path is not None and detection_path in self._observed_paths:
+            contents.append(detection_path)
+        if self._camera_paths:
+            contents.append("scene/cameras/**")
+        return self.rr.blueprint.Spatial3DView(
+            name=name,
+            origin="scene",
+            contents=contents,
         )
+
+    def _detection_statistics_views(self) -> list[Any]:
+        """Build compact IoU quality and match-count charts when GT exists."""
+        metrics_root = "scene/metrics/detection"
+        quality_paths = [
+            f"{metrics_root}/{name}"
+            for name in ("precision", "recall", "mean_matched_iou")
+            if f"{metrics_root}/{name}" in self._observed_paths
+        ]
+        count_paths = [
+            f"{metrics_root}/{name}"
+            for name in ("true_positives", "false_positives", "false_negatives")
+            if f"{metrics_root}/{name}" in self._observed_paths
+        ]
+        views = []
+        if quality_paths:
+            views.append(
+                self.rr.blueprint.TimeSeriesView(
+                    name="3D IoU quality",
+                    origin=metrics_root,
+                    contents=quality_paths,
+                    axis_y=self.rr.blueprint.ScalarAxis(
+                        range=(0.0, 1.0), zoom_lock=True
+                    ),
+                )
+            )
+        if count_paths:
+            views.append(
+                self.rr.blueprint.TimeSeriesView(
+                    name="Detection matches",
+                    origin=metrics_root,
+                    contents=count_paths,
+                )
+            )
+        return views
+
+    def _comparison_tab(
+        self,
+        *,
+        name: str,
+        ground_truth_points: str | None,
+        prediction_points: str | None,
+    ) -> Any:
+        """Build side-by-side GT and prediction scenes plus IoU statistics."""
+        scene_views = []
+        if any(
+            path in self._observed_paths
+            for path in (
+                "scene/ground_truth/segmentation",
+                "scene/ground_truth/detections",
+            )
+        ):
+            scene_views.append(
+                self._scene_view(
+                    name=f"GT · {name}",
+                    point_path=ground_truth_points,
+                    detection_path="scene/ground_truth/detections",
+                )
+            )
+        if any(
+            path in self._observed_paths
+            for path in (
+                "scene/prediction/segmentation",
+                "scene/prediction/detections",
+            )
+        ):
+            scene_views.append(
+                self._scene_view(
+                    name=f"Prediction · {name}",
+                    point_path=prediction_points,
+                    detection_path="scene/prediction/detections",
+                )
+            )
+        comparison = self.rr.blueprint.Horizontal(
+            *scene_views,
+            name=f"{name} comparison",
+        )
+        statistics = self._detection_statistics_views()
+        if not statistics:
+            return comparison
+        return self.rr.blueprint.Vertical(
+            comparison,
+            self.rr.blueprint.Horizontal(*statistics, name="Detection statistics"),
+            row_shares=[4.0, 1.0],
+            name=f"{name} comparison",
+        )
+
+    def _camera_tab(self, camera_paths: list[str]) -> Any:
+        """Build inspectable 2D camera views while 3D views show their frustums."""
+        return self.rr.blueprint.Tabs(
+            *[
+                self.rr.blueprint.Spatial2DView(
+                    name=path.rsplit("/", 1)[-1],
+                    origin=path,
+                    contents=[path],
+                )
+                for path in camera_paths
+            ],
+            name="Cameras",
+        )
+
+    def _send_scene_blueprint_if_needed(self) -> None:
+        """Publish a requirements-driven scene blueprint as entities appear."""
+        scene_paths = frozenset(
+            path
+            for path in self._observed_paths
+            if path == "scene" or path.startswith("scene/")
+        )
+        signature = scene_paths | frozenset(
+            f"@camera:{path}" for path in self._camera_paths
+        )
+        if not scene_paths or signature == self._scene_blueprint_signature:
+            return
+
+        tabs: list[tuple[str, Any]] = []
+        if any(path.endswith("/segmentation") for path in scene_paths):
+            tabs.append(
+                (
+                    "Semantic",
+                    self._comparison_tab(
+                        name="Semantic",
+                        ground_truth_points="scene/ground_truth/segmentation",
+                        prediction_points="scene/prediction/segmentation",
+                    ),
+                )
+            )
+        if "scene/lidar/intensity" in scene_paths:
+            tabs.append(
+                (
+                    "Intensity",
+                    self._comparison_tab(
+                        name="Intensity",
+                        ground_truth_points="scene/lidar/intensity",
+                        prediction_points="scene/lidar/intensity",
+                    ),
+                )
+            )
+        if "scene/lidar/solid" in scene_paths:
+            tabs.append(
+                (
+                    "Geometry",
+                    self._comparison_tab(
+                        name="Geometry",
+                        ground_truth_points="scene/lidar/solid",
+                        prediction_points="scene/lidar/solid",
+                    ),
+                )
+            )
+        if not tabs and any(path.endswith("/detections") for path in scene_paths):
+            tabs.append(
+                (
+                    "Detections",
+                    self._comparison_tab(
+                        name="Detections",
+                        ground_truth_points=None,
+                        prediction_points=None,
+                    ),
+                )
+            )
+        if "scene/prediction/entropy" in scene_paths:
+            tabs.append(
+                (
+                    "Uncertainty",
+                    self.rr.blueprint.Horizontal(
+                        self._scene_view(
+                            name="Prediction · Entropy",
+                            point_path="scene/prediction/entropy",
+                            detection_path="scene/prediction/detections",
+                        ),
+                        self._scene_view(
+                            name="Prediction · Semantic",
+                            point_path="scene/prediction/segmentation",
+                            detection_path="scene/prediction/detections",
+                        ),
+                        name="Uncertainty",
+                    ),
+                )
+            )
+        camera_paths = sorted(self._camera_paths)
+        if camera_paths:
+            tabs.append(("Cameras", self._camera_tab(camera_paths)))
+        if not tabs:
+            return
+
+        preferred_tab = {
+            "semantic": "Semantic",
+            "intensity": "Intensity",
+            "solid": "Geometry",
+        }[self.point_color_mode]
+        tab_names = [name for name, _ in tabs]
+        active_tab = tab_names.index(preferred_tab) if preferred_tab in tab_names else 0
         self.rr.send_blueprint(
             self.rr.blueprint.Blueprint(
-                self.rr.blueprint.Spatial3DView(
-                    name="3D scene",
-                    origin=scene_origin,
-                    contents=contents,
+                self.rr.blueprint.Tabs(
+                    *[tab for _, tab in tabs],
+                    active_tab=active_tab,
+                    name="Multi-task visualization",
                 ),
+                self.rr.blueprint.BlueprintPanel(expanded=False),
+                self.rr.blueprint.SelectionPanel(expanded=False),
+                self.rr.blueprint.TimePanel(expanded=True),
+                auto_layout=False,
                 auto_views=False,
-            )
+            ),
+            make_active=True,
+            make_default=True,
         )
-        self._camera_blueprint_sent = True
+        self._scene_blueprint_signature = signature
 
     def log_events(self, events: Iterable[VisualizationEvent]) -> None:
         """Log multiple visualization events."""
         event_list = list(events)
         for event in event_list:
+            self._observed_paths.add(event.path)
             if isinstance(event, PinholeEvent):
-                self._scene_contents.add(event.path)
-            elif isinstance(event, (PointCloud3DEvent, Boxes3DEvent)):
-                self._scene_contents.add(event.path.rsplit("/", 1)[0])
-        self._send_fused_blueprint_if_needed(event_list)
-        self._send_camera_blueprint_if_needed(event_list)
-        for event in event_list:
+                self._camera_paths.add(event.path)
             self.log_event(event)
+        self._send_fused_blueprint_if_needed(event_list)
+        self._send_scene_blueprint_if_needed()
 
 
 class RerunVisualizationBackend(_RerunVisualizationBackendBase):
