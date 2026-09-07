@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from copy import deepcopy
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
@@ -26,6 +27,7 @@ import torch
 from torch.utils.data import DataLoader, Subset
 
 from autoware_ml.datamodule.base import DataModule
+from autoware_ml.datamodule.pipeline_context import PipelineContext
 from autoware_ml.models.base import BaseModel
 from autoware_ml.visualization.common import as_numpy
 from autoware_ml.visualization.contracts import VisualizationSessionConfig
@@ -53,6 +55,7 @@ class VisualizationPreviewConfig:
     split: PreviewSplit = "test"
     sample_index: int = 0
     max_samples: int = 1
+    prediction_frequency_hz: float = 10.0
     device: str = "auto"
     point_labels: bool = False
     class_names: tuple[str, ...] | None = None
@@ -78,6 +81,8 @@ def run_visualization_preview(
     """Render one or more task samples through a visualization session."""
     if config.max_samples <= 0:
         raise ValueError("max_samples must be greater than zero")
+    if config.prediction_frequency_hz <= 0:
+        raise ValueError("prediction_frequency_hz must be greater than zero")
     if config.mode not in {"auto", "predictions", "data"}:
         raise ValueError(f"Unknown visualization mode: {config.mode}")
 
@@ -100,40 +105,123 @@ def run_visualization_preview(
     visualized_count = 0
 
     dataset = getattr(datamodule, f"{config.split}_dataset")
+    intermediate_provider = getattr(dataset, "get_intermediate_prediction_infos", None)
+    use_intermediate_predictions = mode == "predictions" and callable(intermediate_provider)
+    timeline_stride = max(1, int(round(config.prediction_frequency_hz)))
     with torch.no_grad():
-        for batch_idx, (dataset_index, batch) in enumerate(
-            zip(preview_indices, preview_dataloader, strict=True)
-        ):
-            batch = _move_to_device(batch, device)
-            if model is not None:
-                batch = model.on_after_batch_transfer(batch, 0)
-            predictions = (
-                model.predict_step(batch, batch_idx)
-                if mode == "predictions" and model is not None
-                else None
-            )
-            if (
-                mode == "predictions"
-                and model is not None
-                and _is_raw_multitask_outputs(predictions)
-            ):
-                build_eval_output = getattr(model, "build_eval_output", None)
-                if build_eval_output is None:
-                    raise ValueError(
-                        "Multi-task prediction output requires the model to provide "
-                        "build_eval_output for visualization."
-                    )
-                predictions = build_eval_output(batch, predictions)
+        for dataset_index, batch in zip(preview_indices, preview_dataloader, strict=True):
             raw_info = dataset.get_data_info(dataset_index)
-            session.begin_frame(
-                dataset_index,
-                timestamp=_get_sample_timestamp(raw_info),
+            keyframe_step = (
+                dataset_index * timeline_stride if use_intermediate_predictions else dataset_index
             )
-            _log_preview_sample(session, batch, predictions, dataset_index, mode, config, raw_info)
+            _run_preview_frame(
+                session=session,
+                model=model,
+                batch=batch,
+                prediction_batch_index=visualized_count,
+                timeline_step=keyframe_step,
+                dataset_index=dataset_index,
+                mode=mode,
+                config=config,
+                raw_info=raw_info,
+                device=device,
+            )
             visualized_count += 1
+
+            if not use_intermediate_predictions:
+                continue
+            intermediate_infos = intermediate_provider(
+                dataset_index,
+                config.prediction_frequency_hz,
+            )
+            keyframe_timestamp = _get_sample_timestamp(raw_info)
+            for fallback_offset, intermediate_info in enumerate(intermediate_infos, start=1):
+                intermediate_timestamp = _get_sample_timestamp(intermediate_info)
+                if keyframe_timestamp is not None and intermediate_timestamp is not None:
+                    step_offset = max(
+                        1,
+                        int(
+                            round(
+                                (intermediate_timestamp - keyframe_timestamp)
+                                * config.prediction_frequency_hz
+                            )
+                        ),
+                    )
+                else:
+                    step_offset = fallback_offset
+                intermediate_batch = _build_prediction_batch(
+                    dataset,
+                    datamodule,
+                    intermediate_info,
+                    dataset_index,
+                )
+                _run_preview_frame(
+                    session=session,
+                    model=model,
+                    batch=intermediate_batch,
+                    prediction_batch_index=visualized_count,
+                    timeline_step=keyframe_step + step_offset,
+                    dataset_index=dataset_index,
+                    mode=mode,
+                    config=config,
+                    raw_info=intermediate_info,
+                    device=device,
+                )
+                visualized_count += 1
 
     session.backend.wait_until_interrupted()
     return visualized_count
+
+
+def _run_preview_frame(
+    *,
+    session: VisualizationSession,
+    model: BaseModel | None,
+    batch: dict[str, Any],
+    prediction_batch_index: int,
+    timeline_step: int,
+    dataset_index: int,
+    mode: PreviewMode,
+    config: VisualizationPreviewConfig,
+    raw_info: dict[str, Any],
+    device: torch.device,
+) -> None:
+    """Run and log one keyframe or prediction-only intermediate frame."""
+    batch = _move_to_device(batch, device)
+    if model is not None:
+        batch = model.on_after_batch_transfer(batch, 0)
+    predictions = (
+        model.predict_step(batch, prediction_batch_index)
+        if mode == "predictions" and model is not None
+        else None
+    )
+    if mode == "predictions" and model is not None and _is_raw_multitask_outputs(predictions):
+        build_eval_output = getattr(model, "build_eval_output", None)
+        if build_eval_output is None:
+            raise ValueError(
+                "Multi-task prediction output requires the model to provide "
+                "build_eval_output for visualization."
+            )
+        predictions = build_eval_output(batch, predictions)
+
+    session.begin_frame(timeline_step, timestamp=_get_sample_timestamp(raw_info))
+    _log_preview_sample(session, batch, predictions, dataset_index, mode, config, raw_info)
+
+
+def _build_prediction_batch(
+    dataset: Any,
+    datamodule: DataModule,
+    raw_info: dict[str, Any],
+    dataset_index: int,
+) -> dict[str, Any]:
+    """Transform and collate an unlabeled intermediate record for inference."""
+    context = PipelineContext(dataset=dataset, index=dataset_index)
+    sample = dataset.apply_transforms(
+        deepcopy(raw_info),
+        datamodule.predict_transforms,
+        context,
+    )
+    return datamodule.collate_fn([sample])
 
 
 def _resolve_preview_mode(

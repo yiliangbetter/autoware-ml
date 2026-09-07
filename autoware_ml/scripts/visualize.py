@@ -78,15 +78,12 @@ def _build_preview_config(cfg: DictConfig) -> VisualizationPreviewConfig:
         split=str(visualization_cfg.get("split", "test")),
         sample_index=int(visualization_cfg.get("sample_index", 0)),
         max_samples=int(visualization_cfg.get("max_samples", 1)),
+        prediction_frequency_hz=float(visualization_cfg.get("prediction_frequency_hz", 10.0)),
         device=str(visualization_cfg.get("device", "auto")),
         point_labels=bool(visualization_cfg.get("point_labels", False)),
         point_color_mode=str(visualization_cfg.get("point_color_mode", "semantic")),
-        segmentation_class_names=_resolve_class_names(
-            cfg, visualization_cfg, "segmentation3d"
-        ),
-        detection_class_names=_resolve_class_names(
-            cfg, visualization_cfg, "detection3d"
-        ),
+        segmentation_class_names=_resolve_class_names(cfg, visualization_cfg, "segmentation3d"),
+        detection_class_names=_resolve_class_names(cfg, visualization_cfg, "detection3d"),
         session=VisualizationSessionConfig(
             backend=str(visualization_cfg.get("backend", "rerun")),
             application_id=str(visualization_cfg.get("application_id", "autoware-ml")),
@@ -94,9 +91,7 @@ def _build_preview_config(cfg: DictConfig) -> VisualizationPreviewConfig:
             web_port=int(visualization_cfg.get("web_port", 9090)),
             grpc_port=int(visualization_cfg.get("grpc_port", 9876)),
             wait=bool(visualization_cfg.get("wait", True)),
-            server_memory_limit=str(
-                visualization_cfg.get("server_memory_limit", "25%")
-            ),
+            server_memory_limit=str(visualization_cfg.get("server_memory_limit", "25%")),
             timeline=str(visualization_cfg.get("timeline", "frame")),
             point_color_mode=str(visualization_cfg.get("point_color_mode", "semantic")),
         ),
@@ -134,9 +129,7 @@ def main(cfg: DictConfig) -> None:
             logger=logger,
         )
     if preview_config.mode == "predictions" and checkpoint_path is None:
-        raise ValueError(
-            "Checkpoint path must be provided for prediction visualization."
-        )
+        raise ValueError("Checkpoint path must be provided for prediction visualization.")
     if preview_config.mode not in {"auto", "predictions", "data"}:
         raise ValueError(f"Unknown visualization mode: {preview_config.mode}")
 
@@ -149,17 +142,16 @@ def main(cfg: DictConfig) -> None:
 
     if effective_mode == "predictions" and model is None:
         if checkpoint_path is None:
-            raise ValueError(
-                "Checkpoint path must be provided for prediction visualization."
-            )
+            raise ValueError("Checkpoint path must be provided for prediction visualization.")
         raise RuntimeError("Prediction visualization requires an instantiated model.")
 
     logger.info(
-        "Starting visualization preview: mode=%s split=%s sample_index=%s max_samples=%s device=%s point_labels=%s backend=%s web_port=%s grpc_port=%s wait=%s",
+        "Starting visualization preview: mode=%s split=%s sample_index=%s max_samples=%s prediction_frequency_hz=%s device=%s point_labels=%s backend=%s web_port=%s grpc_port=%s wait=%s",
         effective_mode,
         preview_config.split,
         preview_config.sample_index,
         preview_config.max_samples,
+        preview_config.prediction_frequency_hz,
         preview_config.device,
         preview_config.point_labels,
         preview_config.session.backend,
