@@ -31,6 +31,7 @@ from autoware_ml.visualization.detection3d import (
     build_detection3d_data_events,
     build_detection3d_events,
 )
+from autoware_ml.visualization.events import ClearEvent
 from autoware_ml.visualization.segmentation3d import (
     build_segmentation3d_data_events,
     build_segmentation3d_events,
@@ -52,6 +53,28 @@ class VisualizationSession:
     def set_step(self, step: int) -> None:
         """Advance the visualization timeline."""
         self.backend.set_step(step)
+
+    def begin_frame(self, step: int, *, timestamp: float | None = None) -> None:
+        """Start a replacement-style scene frame and remove stale geometry.
+
+        Rerun resolves entities using latest-at semantics. Explicit clears are
+        therefore required when a 10 Hz prediction frame has no corresponding
+        1 Hz ground truth; otherwise the previous GT would remain visible.
+        Clearing LiDAR and prediction paths also guarantees that point clouds
+        from earlier frames are never accumulated as pseudo multi-sweeps.
+        """
+        self.backend.set_step(step)
+        if timestamp is not None:
+            self.backend.set_timestamp(timestamp)
+        self.backend.log_events(
+            [
+                ClearEvent("scene/lidar"),
+                ClearEvent("scene/prediction"),
+                ClearEvent("scene/ground_truth"),
+                ClearEvent("scene/cameras"),
+                ClearEvent("scene/meta"),
+            ]
+        )
 
     def log_calibration_status(
         self,
