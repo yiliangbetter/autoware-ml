@@ -55,6 +55,8 @@ class VisualizationPreviewConfig:
     device: str = "auto"
     point_labels: bool = False
     class_names: tuple[str, ...] | None = None
+    segmentation_class_names: tuple[str, ...] | None = None
+    detection_class_names: tuple[str, ...] | None = None
     session: VisualizationSessionConfig = field(
         default_factory=VisualizationSessionConfig
     )
@@ -287,6 +289,8 @@ def _resolve_class_names(
     config: VisualizationPreviewConfig,
     batch: dict[str, Any],
     raw_info: dict[str, Any] | None,
+    *,
+    task: Literal["segmentation3d", "detection3d"],
 ) -> Sequence[str] | None:
     """Resolve semantic class names for one preview sample.
 
@@ -297,7 +301,13 @@ def _resolve_class_names(
     info is consulted as well; segmentation pipelines carry them in neither and
     depend on the configured value.
     """
+    configured_names = (
+        config.segmentation_class_names
+        if task == "segmentation3d"
+        else config.detection_class_names
+    )
     for candidate in (
+        configured_names,
         config.class_names,
         _unwrap_single_item(batch.get("class_names")),
         (raw_info or {}).get("class_names"),
@@ -400,7 +410,9 @@ def _log_segmentation_data_preview(
     session.log_segmentation3d_data(
         _get_segmentation_points(batch, gt_labels),
         _unwrap_single_item(gt_labels),
-        class_names=_resolve_class_names(config, batch, raw_info),
+        class_names=_resolve_class_names(
+            config, batch, raw_info, task="segmentation3d"
+        ),
         point_labels=config.point_labels,
         sample_name=sample_name,
         point_color_mode=config.point_color_mode,
@@ -421,7 +433,7 @@ def _log_detection_data_preview(
         points=_unwrap_single_item(batch.get("points")),
         gt_boxes=_unwrap_single_item(batch.get("gt_boxes")),
         gt_labels=_unwrap_single_item(batch.get("gt_labels")),
-        class_names=_resolve_class_names(config, batch, raw_info),
+        class_names=_resolve_class_names(config, batch, raw_info, task="detection3d"),
         sample_name=sample_name,
         point_color_mode=config.point_color_mode,
         root_path="dataset/detection3d",
@@ -446,7 +458,9 @@ def _log_segmentation_preview(
         pred_probs=predictions.get("pred_probs"),
         pred_logits=predictions.get("pred_logits"),
         gt_labels=_unwrap_single_item(gt_labels),
-        class_names=_resolve_class_names(config, batch, raw_info),
+        class_names=_resolve_class_names(
+            config, batch, raw_info, task="segmentation3d"
+        ),
         point_labels=config.point_labels,
         sample_name=sample_name,
         point_color_mode=config.point_color_mode,
@@ -481,7 +495,7 @@ def _log_detection_preview(
         points=_unwrap_single_item(batch.get("points")),
         gt_boxes=_unwrap_single_item(batch.get("gt_boxes")),
         gt_labels=_unwrap_single_item(batch.get("gt_labels")),
-        class_names=_resolve_class_names(config, batch, raw_info),
+        class_names=_resolve_class_names(config, batch, raw_info, task="detection3d"),
         sample_name=sample_name,
         point_color_mode=config.point_color_mode,
     )
@@ -498,7 +512,12 @@ def _log_multitask_preview(
     mode: PreviewMode,
 ) -> None:
     """Render both branches of a combined detection/segmentation sample."""
-    class_names = _resolve_class_names(config, batch, raw_info)
+    segmentation_class_names = _resolve_class_names(
+        config, batch, raw_info, task="segmentation3d"
+    )
+    detection_class_names = _resolve_class_names(
+        config, batch, raw_info, task="detection3d"
+    )
     if mode == "data":
         _log_segmentation_data_preview(session, batch, sample_name, config, raw_info)
         _log_detection_data_preview(session, batch, sample_name, config, raw_info)
@@ -523,7 +542,7 @@ def _log_multitask_preview(
         segmentation_labels,
         pred_logits=predictions.get("seg_pred_logits"),
         gt_labels=predictions.get("seg_target_labels"),
-        class_names=class_names,
+        class_names=segmentation_class_names,
         point_labels=config.point_labels,
         sample_name=sample_name,
         point_color_mode=config.point_color_mode,
@@ -534,7 +553,7 @@ def _log_multitask_preview(
         points=_unwrap_single_item(batch.get("points")),
         gt_boxes=_unwrap_single_item(batch.get("gt_boxes")),
         gt_labels=_unwrap_single_item(batch.get("gt_labels")),
-        class_names=class_names,
+        class_names=detection_class_names,
         sample_name=sample_name,
         point_color_mode=config.point_color_mode,
         root_path="detection3d",

@@ -8,7 +8,10 @@ from typing import Any
 
 import pytest
 
-from autoware_ml.datamodule.common.sources import AnnotationSource, coerce_annotation_sources
+from autoware_ml.datamodule.common.sources import (
+    AnnotationSource,
+    coerce_annotation_sources,
+)
 from autoware_ml.datamodule.t4dataset.segdet import T4SegmentationDetection3DDataset
 
 
@@ -18,6 +21,20 @@ def _make_frame(token: str, *, with_instances: bool = True) -> dict[str, Any]:
         "lidar_points": {"lidar_path": f"lidar/{token}.bin", "num_pts_feats": 5},
         "pts_semantic_mask_path": f"seg/{token}.bin",
         "pts_semantic_mask_categories": {"car": 0, "vegetation": 1},
+        "timestamp": 12.3,
+        "scene_token": "scene-1",
+        "images": {
+            "CAM_FRONT": {
+                "img_path": f"images/{token}.jpg",
+                "cam2img": [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
+                "lidar2cam": [
+                    [1.0, 0.0, 0.0, 0.0],
+                    [0.0, 1.0, 0.0, 0.0],
+                    [0.0, 0.0, 1.0, 0.0],
+                    [0.0, 0.0, 0.0, 1.0],
+                ],
+            }
+        },
     }
     if with_instances:
         frame["instances"] = [
@@ -32,7 +49,9 @@ def _make_frame(token: str, *, with_instances: bool = True) -> dict[str, Any]:
     return frame
 
 
-def _write_pkl(path: Path, frames: list[dict[str, Any]], *, with_metainfo: bool = True) -> str:
+def _write_pkl(
+    path: Path, frames: list[dict[str, Any]], *, with_metainfo: bool = True
+) -> str:
     payload: dict[str, Any] = {"data_list": frames}
     if with_metainfo:
         payload["metainfo"] = {"classes": ["car"]}
@@ -50,20 +69,34 @@ def _build_dataset(sources: list[AnnotationSource]) -> T4SegmentationDetection3D
     )
 
 
-def test_coerce_annotation_sources_single_path_keeps_full_supervision(tmp_path: Path) -> None:
+def test_coerce_annotation_sources_single_path_keeps_full_supervision(
+    tmp_path: Path,
+) -> None:
     sources = coerce_annotation_sources("info/train.pkl", str(tmp_path))
 
     assert sources == [
-        AnnotationSource(path=str(tmp_path / "info/train.pkl"), det3d=True, seg3d=True, repeat=1)
+        AnnotationSource(
+            path=str(tmp_path / "info/train.pkl"), det3d=True, seg3d=True, repeat=1
+        )
     ]
 
 
 def test_coerce_annotation_sources_requires_exact_spec_keys() -> None:
     with pytest.raises(ValueError, match="missing \\['repeat'\\]"):
-        coerce_annotation_sources([{"path": "a.pkl", "det3d": True, "seg3d": True}], "/data")
+        coerce_annotation_sources(
+            [{"path": "a.pkl", "det3d": True, "seg3d": True}], "/data"
+        )
     with pytest.raises(ValueError, match="unknown \\['oversample'\\]"):
         coerce_annotation_sources(
-            [{"path": "a.pkl", "det3d": True, "seg3d": True, "repeat": 1, "oversample": 2}],
+            [
+                {
+                    "path": "a.pkl",
+                    "det3d": True,
+                    "seg3d": True,
+                    "repeat": 1,
+                    "oversample": 2,
+                }
+            ],
             "/data",
         )
     with pytest.raises(ValueError, match="repeat must be >= 1"):
@@ -77,7 +110,9 @@ def test_coerce_annotation_sources_requires_exact_spec_keys() -> None:
 
 
 def test_dataset_mixes_sources_with_flags_and_repeat(tmp_path: Path) -> None:
-    det_seg_pkl = _write_pkl(tmp_path / "det_seg.pkl", [_make_frame("a1"), _make_frame("a2")])
+    det_seg_pkl = _write_pkl(
+        tmp_path / "det_seg.pkl", [_make_frame("a1"), _make_frame("a2")]
+    )
     seg_only_pkl = _write_pkl(
         tmp_path / "seg_only.pkl",
         [_make_frame("b1", with_instances=False)],
@@ -102,20 +137,31 @@ def test_dataset_mixes_sources_with_flags_and_repeat(tmp_path: Path) -> None:
     assert len(det_info["instances"]) == 1
     assert det_info["pts_semantic_mask_categories"] == {"car": 0, "vegetation": 1}
     assert det_info["label_to_category"] == {0: "car"}
+    assert det_info["has_detection_ground_truth"] is True
+    assert det_info["has_segmentation_ground_truth"] is True
+    assert det_info["timestamp"] == 12.3
+    assert det_info["scene_token"] == "scene-1"
+    assert det_info["images"]["CAM_FRONT"]["img_path"] == "/data/images/a1.jpg"
 
     seg_info = dataset.get_data_info(2)
     assert seg_info["instances"] == []
     assert seg_info["label_to_category"] == {}
     assert seg_info["pts_semantic_mask_categories"] == {"car": 0, "vegetation": 1}
+    assert seg_info["has_detection_ground_truth"] is False
+    assert seg_info["has_segmentation_ground_truth"] is True
 
 
 def test_dataset_empties_seg_categories_when_seg3d_disabled(tmp_path: Path) -> None:
     pkl = _write_pkl(tmp_path / "det_only_supervision.pkl", [_make_frame("a1")])
-    dataset = _build_dataset([AnnotationSource(path=pkl, det3d=True, seg3d=False, repeat=1)])
+    dataset = _build_dataset(
+        [AnnotationSource(path=pkl, det3d=True, seg3d=False, repeat=1)]
+    )
 
     info = dataset.get_data_info(0)
     assert info["pts_semantic_mask_categories"] == {}
     assert len(info["instances"]) == 1
+    assert info["has_detection_ground_truth"] is True
+    assert info["has_segmentation_ground_truth"] is False
 
 
 def test_dataset_rejects_det_source_without_instances(tmp_path: Path) -> None:
