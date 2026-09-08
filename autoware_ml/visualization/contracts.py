@@ -36,6 +36,7 @@ class VisualizationSessionConfig:
     server_memory_limit: str = "25%"
     timeline: str = "frame"
     point_color_mode: Literal["semantic", "intensity", "solid"] = "semantic"
+    camera_frustums_visible: bool = False
 
 
 class VisualizationBackend(Protocol):

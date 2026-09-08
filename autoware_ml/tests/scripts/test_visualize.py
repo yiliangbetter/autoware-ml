@@ -63,6 +63,7 @@ def test_build_preview_config_defaults_to_an_automatic_rerun_preview() -> None:
     assert config.session.grpc_port == 9876
     assert config.session.wait is True
     assert config.session.timeline == "frame"
+    assert config.session.camera_frustums_visible is False
 
 
 def test_build_preview_config_maps_every_visualization_override() -> None:
@@ -85,6 +86,7 @@ def test_build_preview_config_maps_every_visualization_override() -> None:
                     "wait": False,
                     "server_memory_limit": "10%",
                     "timeline": "sample",
+                    "camera_frustums_visible": True,
                     "segmentation3d_class_names": ["road", "car"],
                     "detection3d_class_names": ["car"],
                 }
@@ -110,3 +112,4 @@ def test_build_preview_config_maps_every_visualization_override() -> None:
     assert config.session.server_memory_limit == "10%"
     assert config.session.timeline == "sample"
     assert config.session.point_color_mode == "semantic"
+    assert config.session.camera_frustums_visible is True

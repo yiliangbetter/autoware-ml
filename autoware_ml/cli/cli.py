@@ -511,6 +511,13 @@ def visualize(
         str,
         typer.Option("--point-color-mode", help="Point colors: semantic, intensity, or solid"),
     ] = "semantic",
+    camera_frustums_visible: Annotated[
+        bool,
+        typer.Option(
+            "--camera-frustums/--no-camera-frustums",
+            help="Show camera frustums and image planes initially in 3D views",
+        ),
+    ] = False,
     web_port: Annotated[
         int,
         typer.Option("--web-port", help="Rerun web viewer HTTP port"),
@@ -543,6 +550,7 @@ def visualize(
         backend: Visualization backend name.
         device: Preview execution device.
         point_labels: Whether to log per-point label text.
+        camera_frustums_visible: Whether camera geometry starts visible in 3D views.
         web_port: HTTP port for the Rerun web viewer.
         grpc_port: gRPC port used by the Rerun SDK and web viewer proxy.
         wait: Whether to keep the web viewer server alive after logging.
@@ -558,6 +566,7 @@ def visualize(
         f"+visualization.device={device}",
         f"+visualization.point_labels={str(point_labels).lower()}",
         f"+visualization.point_color_mode={point_color_mode}",
+        f"+visualization.camera_frustums_visible={str(camera_frustums_visible).lower()}",
         f"+visualization.web_port={web_port}",
         f"+visualization.grpc_port={grpc_port}",
         f"+visualization.wait={str(wait).lower()}",
