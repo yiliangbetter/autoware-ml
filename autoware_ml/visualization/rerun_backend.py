@@ -42,6 +42,15 @@ from autoware_ml.visualization.events import (
 
 logger = logging.getLogger(__name__)
 
+_DETECTION_METRIC_LABELS = {
+    "precision": "Precision",
+    "recall": "Recall",
+    "mean_matched_iou": "Mean matched IoU",
+    "true_positives": "True positives",
+    "false_positives": "False positives",
+    "false_negatives": "False negatives",
+}
+
 
 def _load_rerun_module() -> Any:
     """Load the optional rerun dependency lazily."""
@@ -73,6 +82,26 @@ def _patch_class_id_array_protocol() -> None:
         return np.asarray(self.id, dtype=dtype, copy=copy)
 
     class_id_type.__array__ = __array__
+
+
+def _patch_time_int_array_protocol() -> None:
+    """Make Rerun blueprint time ranges serializable under NumPy 1.x.
+
+    ``rerun-sdk`` 0.23.1 generates the same incompatible ``__array__``
+    implementation for ``TimeInt`` as it does for ``ClassId``. Cursor-relative
+    plot ranges exercise this datatype, so patch it before building the
+    detection-statistics blueprint.
+    """
+    time_int_module = import_module("rerun.datatypes.time_int")
+    time_int_type = time_int_module.TimeInt
+
+    def __array__(self: Any, dtype: Any = None, copy: bool | None = None) -> np.ndarray:
+        """Convert one time integer to a NumPy array across NumPy 1.x and 2.x."""
+        if copy is None:
+            return np.asarray(self.value, dtype=dtype)
+        return np.asarray(self.value, dtype=dtype, copy=copy)
+
+    time_int_type.__array__ = __array__
 
 
 def _verify_annotation_context_support(rerun_module: Any) -> None:
@@ -118,6 +147,7 @@ class _RerunVisualizationBackendBase:
         self.timeline = config.timeline
         self.rr = _load_rerun_module()
         _patch_class_id_array_protocol()
+        _patch_time_int_array_protocol()
         _verify_annotation_context_support(self.rr)
         self.rr.init(
             config.application_id,
@@ -343,6 +373,30 @@ class _RerunVisualizationBackendBase:
             for name in ("true_positives", "false_positives", "false_negatives")
             if f"{metrics_root}/{name}" in self._observed_paths
         ]
+
+        def visible_time_range() -> list[Any]:
+            # Rerun blueprint archetypes are single-use component batches; each
+            # view needs its own instance rather than sharing one object.
+            return [
+                self.rr.blueprint.VisibleTimeRange(
+                    self.timeline,
+                    start=self.rr.blueprint.TimeRangeBoundary.cursor_relative(seq=-10),
+                    end=self.rr.blueprint.TimeRangeBoundary.cursor_relative(seq=10),
+                )
+            ]
+
+        def series_overrides(paths: list[str]) -> dict[str, list[Any]]:
+            return {
+                path: [
+                    self.rr.blueprint.VisualizerOverrides(["SeriesLines", "SeriesPoints"]),
+                    self.rr.SeriesPoints(
+                        names=_DETECTION_METRIC_LABELS[path.rsplit("/", 1)[-1]],
+                        marker_sizes=8.0,
+                    ),
+                ]
+                for path in paths
+            }
+
         views = []
         if quality_paths:
             views.append(
@@ -351,6 +405,8 @@ class _RerunVisualizationBackendBase:
                     origin=metrics_root,
                     contents=quality_paths,
                     axis_y=self.rr.blueprint.ScalarAxis(range=(0.0, 1.0), zoom_lock=True),
+                    overrides=series_overrides(quality_paths),
+                    time_ranges=visible_time_range(),
                 )
             )
         if count_paths:
@@ -359,6 +415,8 @@ class _RerunVisualizationBackendBase:
                     name="Detection matches",
                     origin=metrics_root,
                     contents=count_paths,
+                    overrides=series_overrides(count_paths),
+                    time_ranges=visible_time_range(),
                 )
             )
         return views
@@ -410,7 +468,7 @@ class _RerunVisualizationBackendBase:
         return self.rr.blueprint.Vertical(
             comparison,
             self.rr.blueprint.Horizontal(*statistics, name="Detection statistics"),
-            row_shares=[4.0, 1.0],
+            row_shares=[2.0, 1.0],
             name=f"{name} comparison",
         )
 
@@ -521,7 +579,10 @@ class _RerunVisualizationBackendBase:
                     active_tab=active_tab,
                     name="Multi-task visualization",
                 ),
-                self.rr.blueprint.BlueprintPanel(expanded=False),
+                # Camera visibility is a per-view blueprint property. Keep the
+                # native tree open when cameras exist so its eye control is
+                # immediately available without restarting the visualization.
+                self.rr.blueprint.BlueprintPanel(expanded=bool(camera_paths)),
                 self.rr.blueprint.SelectionPanel(expanded=False),
                 self.rr.blueprint.TimePanel(expanded=False),
                 auto_layout=False,
