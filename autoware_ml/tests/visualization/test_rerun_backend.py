@@ -99,6 +99,11 @@ class _FakeAnnotationContext:
 def _build_fake_rerun(calls: dict[str, Any]) -> Any:
     """Build a fake ``rerun`` module that records every call it receives."""
 
+    class _FakeRecording:
+        @staticmethod
+        def flush(*, blocking: bool) -> None:
+            calls["flushes"].append(blocking)
+
     class _FakeBlueprintModule:
         @staticmethod
         def _part(kind: str, *args: Any, **kwargs: Any) -> dict[str, Any]:
@@ -162,6 +167,10 @@ def _build_fake_rerun(calls: dict[str, Any]) -> Any:
         @staticmethod
         def serve_web(**kwargs: Any) -> None:
             calls["serve_web"] = kwargs
+
+        @staticmethod
+        def get_global_data_recording() -> _FakeRecording:
+            return _FakeRecording()
 
         @staticmethod
         def set_time(
@@ -232,6 +241,7 @@ def rerun_calls(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
         "logs": [],
         "times": [],
         "blueprints": [],
+        "flushes": [],
     }
     monkeypatch.setattr(
         "autoware_ml.visualization.rerun_backend._load_rerun_module",
@@ -279,6 +289,14 @@ def test_backend_forwards_timeline_steps(
         ("frame", 3, None),
         ("sensor_time", None, 12.5),
     ]
+
+
+def test_backend_flushes_pending_data_before_returning(
+    backend: RerunVisualizationBackend, rerun_calls: dict[str, Any]
+) -> None:
+    backend.wait_until_interrupted()
+
+    assert rerun_calls["flushes"] == [True]
 
 
 def test_backend_logs_annotation_context_statically(
