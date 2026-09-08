@@ -427,6 +427,7 @@ def test_backend_builds_named_comparison_views_without_root_origins(
     assert "3D IoU quality" in serialized
     assert "'origin': '/'" not in serialized
     assert "'auto_views': False" in serialized
+    assert "'kind': 'TimePanel', 'args': (), 'expanded': False" in serialized
 
 
 def test_backend_converts_yaw_to_a_z_axis_quaternion(
