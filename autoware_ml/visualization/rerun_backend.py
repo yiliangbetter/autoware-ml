@@ -550,7 +550,11 @@ class RerunVisualizationBackend(_RerunVisualizationBackendBase):
         logger.info("Rerun web viewer: %s", self.web_url)
 
     def wait_until_interrupted(self) -> None:
-        """Keep the web viewer server alive until interrupted."""
+        """Flush all logged data, then keep the web viewer alive if requested."""
+        recording = self.rr.get_global_data_recording()
+        if recording is None:
+            raise RuntimeError("Rerun did not create a global data recording.")
+        recording.flush(blocking=True)
         if not self.wait:
             return
         logger.info("Rerun web viewer is running. Press Ctrl+C to stop.")
