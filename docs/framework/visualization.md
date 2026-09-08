@@ -209,8 +209,9 @@ Each available camera is logged as a transform, pinhole calibration, and image.
 The Rerun blueprint places the camera frustums in the same 3D scene as the
 LiDAR points and boxes, enabling live 3D camera views and projection inspection.
 Every explicit 3D view uses `scene` as its origin. Automatic views are disabled,
-and the Blueprint and Selection panels start collapsed, so a root `/` text view
-or stream is not added to the working layout.
+and the Blueprint, Selection, and Time panels start collapsed, so a root `/`
+text view or stream is not shown in the working layout. The Time panel can be
+expanded when the 10 Hz timeline needs to be scrubbed.
 Camera overlays are pointwise LiDAR segmentation only; camera/pixel
 segmentation is outside this scope.
 

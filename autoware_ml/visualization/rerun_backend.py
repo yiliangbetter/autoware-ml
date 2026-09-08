@@ -509,7 +509,7 @@ class _RerunVisualizationBackendBase:
                 ),
                 self.rr.blueprint.BlueprintPanel(expanded=False),
                 self.rr.blueprint.SelectionPanel(expanded=False),
-                self.rr.blueprint.TimePanel(expanded=True),
+                self.rr.blueprint.TimePanel(expanded=False),
                 auto_layout=False,
                 auto_views=False,
             ),
