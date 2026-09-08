@@ -213,15 +213,17 @@ point radii instead of repeating them per point. These transport optimizations
 preserve scene geometry and calibration while keeping 10 Hz recordings usable
 over an SSH tunnel.
 Camera geometry starts hidden to keep the GT/PD point-cloud comparisons clear.
-Selecting a 3D view exposes Rerun's native visibility control for
-`/scene/cameras`; changing it shows or hides the complete camera subtree,
-including both frustums and projected image planes. The
-`--camera-frustums`/`--no-camera-frustums` CLI pair controls the initial state
-without removing the interactive visibility control.
+When calibrated cameras are present, the Blueprint panel starts expanded and
+shows Rerun's eye control beside the `cameras` subtree in each 3D view. This
+control behaves like a checkbox and immediately shows or hides the complete
+camera subtree, including both frustums and projected image planes, without
+restarting inference. The `--camera-frustums`/`--no-camera-frustums` CLI pair
+only controls the initial checkbox state. Pure LiDAR previews keep the panel
+collapsed because they have no camera control to expose.
 Every explicit 3D view uses `scene` as its origin. Automatic views are disabled,
-and the Blueprint, Selection, and Time panels start collapsed, so a root `/`
-text view or stream is not shown in the working layout. The Time panel can be
-expanded when the 10 Hz timeline needs to be scrubbed.
+and the Selection and Time panels start collapsed, so a root `/` text view or
+stream is not shown in the working layout. The Time panel can be expanded when
+the 10 Hz timeline needs to be scrubbed.
 Camera overlays are pointwise LiDAR segmentation only; camera/pixel
 segmentation is outside this scope.
 
@@ -232,10 +234,21 @@ rendered with GT and prediction, while intermediate frames contain prediction
 only. Missing source files are skipped, scene boundaries are never crossed, and
 GT is neither interpolated nor held from the previous frame.
 
+Detection statistics are rendered as both line and point series. Point markers
+keep a single GT keyframe visible and expose its exact value on hover. A
+cursor-relative ±10-frame query window keeps the plot focused on the surrounding
+GT anchors. Loading additional GT anchors extends the same plots into normal
+time-series curves; prediction-only intermediate frames do not fabricate
+statistics. The statistics row receives one third of the comparison height so
+its axes and markers remain readable without displacing the primary point-cloud
+views. Match-count axes auto-scale as later GT anchors add larger values, without
+republishing the blueprint or resetting interactive camera visibility.
+
 Before each timeline step, the dynamic LiDAR, prediction, ground-truth, camera,
-metric, and metadata entities are cleared recursively. Intermediate prediction
-records also force `sweeps=[]`, so only the current source cloud is inferred and
-displayed; points from previous frames cannot accumulate.
+and metadata entities are cleared recursively. Detection metrics retain their
+timestamped history for the plots. Intermediate prediction records also force
+`sweeps=[]`, so only the current source cloud is inferred and displayed; points
+from previous frames cannot accumulate.
 
 The preview setting `VisualizationPreviewConfig.point_color_mode` accepts
 `semantic` (default), `intensity`, or `solid`. For `intensity`, the fourth point

@@ -174,7 +174,7 @@ autoware-ml visualize \
 - `--device`: Execution device for preview inference (default: `auto`, which uses CUDA when available)
 - `--point-labels` / `--no-point-labels`: Log per-point text labels. Disabled by default because large semantic point clouds become slow when every point has text.
 - `--point-color-mode`: Initially active point-cloud tab: semantic class, normalized LiDAR intensity, or solid geometry color (default: `semantic`). All available modes remain selectable in Rerun.
-- `--camera-frustums` / `--no-camera-frustums`: Initial visibility of camera frustums and projected image planes in 3D views (default: hidden). Select `/scene/cameras` in a 3D view to change its native Rerun visibility control interactively.
+- `--camera-frustums` / `--no-camera-frustums`: Initial visibility of camera frustums and projected image planes in 3D views (default: hidden). When cameras are available, use the eye control beside `cameras` in the expanded Blueprint panel to show or hide them dynamically in each 3D view.
 - `--web-port`: Rerun web viewer HTTP port (default: `9090`)
 - `--grpc-port`: Rerun SDK gRPC port used by the web viewer proxy (default: `9876`)
 - `--wait` / `--no-wait`: Keep the Rerun web server alive after logging (default: `--wait`)
@@ -217,7 +217,7 @@ Current visualization coverage:
 
 - calibration status: camera image, projected lidar overlay, fused image, status labels, and confidence summary
 - segmentation3d: GT/PD point clouds, semantic/intensity/solid coloring, and pointwise entropy computed from prediction logits
-- detection3d: GT/PD boxes overlaid on point clouds with same-class, yaw-aware 3D IoU statistics
+- detection3d: GT/PD boxes overlaid on point clouds with same-class, yaw-aware 3D IoU statistics; line-and-point plots remain readable with a single GT keyframe and expose exact values on hover
 - multi-task PTv3: combined segmentation and detection comparisons, optional calibrated live 3D camera frustums, and 10 Hz prediction-only intermediate frames between 1 Hz GT anchors
 
 ## mlflow ui

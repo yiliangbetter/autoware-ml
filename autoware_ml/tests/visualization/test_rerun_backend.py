@@ -39,6 +39,7 @@ from autoware_ml.visualization.events import (
 from autoware_ml.visualization.rerun_backend import (
     RerunVisualizationBackend,
     _patch_class_id_array_protocol,
+    _patch_time_int_array_protocol,
     _verify_annotation_context_support,
 )
 
@@ -156,6 +157,20 @@ def _build_fake_rerun(calls: dict[str, Any]) -> Any:
             return cls._part("EntityBehavior", *args, **kwargs)
 
         @classmethod
+        def VisualizerOverrides(cls, *args: Any, **kwargs: Any) -> dict[str, Any]:
+            return cls._part("VisualizerOverrides", *args, **kwargs)
+
+        @classmethod
+        def VisibleTimeRange(cls, *args: Any, **kwargs: Any) -> dict[str, Any]:
+            calls.setdefault("visible_time_ranges", []).append((args, kwargs))
+            return cls._part("VisibleTimeRange", *args, **kwargs)
+
+        class TimeRangeBoundary:
+            @staticmethod
+            def cursor_relative(**kwargs: Any) -> dict[str, Any]:
+                return {"kind": "cursor_relative", **kwargs}
+
+        @classmethod
         def BlueprintPanel(cls, *args: Any, **kwargs: Any) -> dict[str, Any]:
             return cls._part("BlueprintPanel", *args, **kwargs)
 
@@ -234,6 +249,10 @@ def _build_fake_rerun(calls: dict[str, Any]) -> Any:
         @staticmethod
         def Scalars(value: Any) -> tuple[str, Any]:
             return ("Scalars", value)
+
+        @staticmethod
+        def SeriesPoints(**kwargs: Any) -> tuple[str, dict[str, Any]]:
+            return ("SeriesPoints", kwargs)
 
         @staticmethod
         def TextLog(text: str, **kwargs: Any) -> tuple[str, str, dict[str, Any]]:
@@ -446,6 +465,9 @@ def test_backend_builds_named_comparison_views_without_root_origins(
             ScalarEvent(path="scene/metrics/detection/precision", value=1.0),
             ScalarEvent(path="scene/metrics/detection/recall", value=1.0),
             ScalarEvent(path="scene/metrics/detection/mean_matched_iou", value=1.0),
+            ScalarEvent(path="scene/metrics/detection/true_positives", value=20.0),
+            ScalarEvent(path="scene/metrics/detection/false_positives", value=12.0),
+            ScalarEvent(path="scene/metrics/detection/false_negatives", value=8.0),
         ]
     )
 
@@ -463,6 +485,31 @@ def test_backend_builds_named_comparison_views_without_root_origins(
     assert "'origin': '/'" not in serialized
     assert "'auto_views': False" in serialized
     assert "'kind': 'TimePanel', 'args': (), 'expanded': False" in serialized
+    assert "'kind': 'BlueprintPanel', 'args': (), 'expanded': True" in serialized
+    assert "'kind': 'VisualizerOverrides', 'args': (['SeriesLines', 'SeriesPoints'],)" in serialized
+    assert "('SeriesPoints', {'names': 'Precision', 'marker_sizes': 8.0})" in serialized
+    assert "'row_shares': [2.0, 1.0]" in serialized
+    assert "'kind': 'VisibleTimeRange', 'args': ('frame',)" in serialized
+    # Each of the Semantic and Intensity comparisons has two metric plots,
+    # and every plot must receive a distinct Rerun time-range archetype.
+    assert len(rerun_calls["visible_time_ranges"]) == 4
+
+
+def test_blueprint_panel_stays_collapsed_without_cameras(
+    backend: RerunVisualizationBackend,
+    rerun_calls: dict[str, Any],
+) -> None:
+    backend.log_events(
+        [
+            PointCloud3DEvent(
+                path="scene/prediction/segmentation",
+                positions=np.zeros((2, 3), dtype=np.float32),
+            )
+        ]
+    )
+
+    blueprint, _ = rerun_calls["blueprints"][-1]
+    assert "'kind': 'BlueprintPanel', 'args': (), 'expanded': False" in repr(blueprint)
 
 
 def test_backend_can_show_camera_geometry_initially(
@@ -576,3 +623,24 @@ def test_installed_rerun_passes_the_compatibility_probe() -> None:
     _patch_class_id_array_protocol()
 
     _verify_annotation_context_support(rerun)
+
+
+def test_installed_rerun_serializes_cursor_relative_time_ranges() -> None:
+    """The metric plot window must not be dropped by Rerun under NumPy 1.x."""
+    rerun = pytest.importorskip("rerun")
+    _patch_time_int_array_protocol()
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        view = rerun.blueprint.TimeSeriesView(
+            origin="scene/metrics/detection",
+            time_ranges=[
+                rerun.blueprint.VisibleTimeRange(
+                    "frame",
+                    start=rerun.blueprint.TimeRangeBoundary.cursor_relative(seq=-10),
+                    end=rerun.blueprint.TimeRangeBoundary.cursor_relative(seq=10),
+                )
+            ],
+        )
+
+    assert view is not None
