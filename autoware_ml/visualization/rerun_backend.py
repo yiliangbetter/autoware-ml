@@ -128,6 +128,7 @@ class _RerunVisualizationBackendBase:
         if config.point_color_mode not in POINT_COLOR_MODES:
             raise ValueError("point color mode must be 'semantic', 'intensity', or 'solid'")
         self.point_color_mode = config.point_color_mode
+        self.camera_frustums_visible = config.camera_frustums_visible
         self._observed_paths: set[str] = set()
         self._camera_paths: set[str] = set()
         self._scene_blueprint_signature: frozenset[str] = frozenset()
@@ -302,7 +303,7 @@ class _RerunVisualizationBackendBase:
         point_path: str | None,
         detection_path: str | None,
     ) -> Any:
-        """Build one explicit scene view with camera frustums overlaid."""
+        """Build one scene with a native visibility toggle for camera geometry."""
         contents = []
         if point_path is not None and point_path in self._observed_paths:
             contents.append(point_path)
@@ -310,10 +311,20 @@ class _RerunVisualizationBackendBase:
             contents.append(detection_path)
         if self._camera_paths:
             contents.append("scene/cameras/**")
+        overrides = (
+            {
+                "/scene/cameras": self.rr.blueprint.EntityBehavior(
+                    visible=self.camera_frustums_visible
+                )
+            }
+            if self._camera_paths
+            else None
+        )
         return self.rr.blueprint.Spatial3DView(
             name=name,
             origin="scene",
             contents=contents,
+            overrides=overrides,
         )
 
     def _detection_statistics_views(self) -> list[Any]:

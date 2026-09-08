@@ -142,6 +142,10 @@ def _build_fake_rerun(calls: dict[str, Any]) -> Any:
             return cls._part("ScalarAxis", *args, **kwargs)
 
         @classmethod
+        def EntityBehavior(cls, *args: Any, **kwargs: Any) -> dict[str, Any]:
+            return cls._part("EntityBehavior", *args, **kwargs)
+
+        @classmethod
         def BlueprintPanel(cls, *args: Any, **kwargs: Any) -> dict[str, Any]:
             return cls._part("BlueprintPanel", *args, **kwargs)
 
@@ -399,6 +403,11 @@ def test_backend_builds_named_comparison_views_without_root_origins(
                 path="scene/prediction/entropy",
                 positions=np.zeros((2, 3), dtype=np.float32),
             ),
+            PinholeEvent(
+                path="scene/cameras/front",
+                image_from_camera=np.eye(3, dtype=np.float32),
+                resolution=(64, 36),
+            ),
             Boxes3DEvent(
                 path="scene/prediction/detections",
                 centers=np.zeros((1, 3), dtype=np.float32),
@@ -425,9 +434,43 @@ def test_backend_builds_named_comparison_views_without_root_origins(
     assert "GT · Intensity" in serialized
     assert "Prediction · Entropy" in serialized
     assert "3D IoU quality" in serialized
+    assert (
+        "'/scene/cameras': {'kind': 'EntityBehavior', 'args': (), 'visible': False}" in serialized
+    )
     assert "'origin': '/'" not in serialized
     assert "'auto_views': False" in serialized
     assert "'kind': 'TimePanel', 'args': (), 'expanded': False" in serialized
+
+
+def test_backend_can_show_camera_geometry_initially(
+    rerun_calls: dict[str, Any],
+) -> None:
+    backend = RerunVisualizationBackend(
+        VisualizationSessionConfig(
+            web_port=9091,
+            grpc_port=9877,
+            wait=False,
+            camera_frustums_visible=True,
+        )
+    )
+
+    backend.log_events(
+        [
+            PinholeEvent(
+                path="scene/cameras/front",
+                image_from_camera=np.eye(3, dtype=np.float32),
+                resolution=(64, 36),
+            ),
+            PointCloud3DEvent(
+                path="scene/prediction/segmentation",
+                positions=np.zeros((2, 3), dtype=np.float32),
+            ),
+        ]
+    )
+
+    blueprint, _ = rerun_calls["blueprints"][-1]
+    serialized = repr(blueprint)
+    assert "'/scene/cameras': {'kind': 'EntityBehavior', 'args': (), 'visible': True}" in serialized
 
 
 def test_backend_converts_yaw_to_a_z_axis_quaternion(

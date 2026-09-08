@@ -178,7 +178,7 @@ The explicit scene layout contains:
 - a **Geometry** comparison with a neutral point color
 - an **Uncertainty** comparison between logit entropy and predicted semantics
 - a **Cameras** tab for the image streams, while every 3D comparison also
-  includes the calibrated camera frustums
+  contains optional calibrated camera frustums and image planes
 - compact 3D IoU quality and match-count plots below GT/PD detection comparisons
 
 The three point-cloud tabs make the coloring mode selectable in the viewer.
@@ -208,6 +208,12 @@ segmentation-only preview; no synthetic detection objects are created.
 Each available camera is logged as a transform, pinhole calibration, and image.
 The Rerun blueprint places the camera frustums in the same 3D scene as the
 LiDAR points and boxes, enabling live 3D camera views and projection inspection.
+Camera geometry starts hidden to keep the GT/PD point-cloud comparisons clear.
+Selecting a 3D view exposes Rerun's native visibility control for
+`/scene/cameras`; changing it shows or hides the complete camera subtree,
+including both frustums and projected image planes. The
+`--camera-frustums`/`--no-camera-frustums` CLI pair controls the initial state
+without removing the interactive visibility control.
 Every explicit 3D view uses `scene` as its origin. Automatic views are disabled,
 and the Blueprint, Selection, and Time panels start collapsed, so a root `/`
 text view or stream is not shown in the working layout. The Time panel can be
