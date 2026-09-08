@@ -756,11 +756,23 @@ def _append_aligned_intensity(
     strength = _unwrap_single_item(batch.get("origin_strength"))
     if strength is None:
         strength = _unwrap_single_item(batch.get("strength"))
+    if strength is None:
+        features = _unwrap_single_item(batch.get("feat"))
+        coordinates = _unwrap_single_item(batch.get("coord"))
         if (
-            strength is not None
-            and _first_dimension(strength) != point_count
-            and inverse is not None
+            features is not None
+            and coordinates is not None
+            and len(features.shape) == 2
+            and len(coordinates.shape) == 2
+            and features.shape[0] == coordinates.shape[0]
+            and features.shape[1] == coordinates.shape[1] + 1
         ):
+            # PTv3 BuildPointFeatures concatenates [coord, strength], while
+            # the datamodule's explicit collation map retains only ``feat``.
+            # Recover its final intensity channel for visualization.
+            strength = features[:, -1]
+    if strength is not None:
+        if _first_dimension(strength) != point_count and inverse is not None:
             if isinstance(inverse, torch.Tensor):
                 strength = strength[inverse.long()]
             else:

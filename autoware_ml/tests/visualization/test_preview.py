@@ -274,6 +274,40 @@ def test_preview_reconstructs_intensity_for_voxelized_segmentation(
     assert not np.array_equal(intensity.colors[0], intensity.colors[1])
 
 
+def test_preview_recovers_ptv3_intensity_from_built_features(
+    preview_session: RecordingBackend,
+) -> None:
+    coordinates = np.array([[0.0, 0.0, 0.0], [1.0, 1.0, 1.0]], dtype=np.float32)
+    sample = {
+        "coord": coordinates,
+        "feat": np.concatenate((coordinates, np.array([[0.1], [0.9]], dtype=np.float32)), axis=1),
+        "inverse": np.array([0, 1, 0], dtype=np.int64),
+        "origin_segment": np.array([0, 1, 0], dtype=np.int64),
+    }
+
+    run_visualization_preview(
+        VoxelizedSegmentationPreviewModel(),
+        PreviewDataModule(
+            [sample],
+            {
+                "coord": "concat",
+                "feat": "concat",
+                "inverse": "index_concat",
+                "origin_segment": "concat",
+            },
+        ),
+        _NOOP_PREVIEW,
+    )
+
+    intensity = next(
+        event
+        for event in preview_session.events
+        if isinstance(event, PointCloud3DEvent) and event.path == "scene/lidar/intensity"
+    )
+    assert intensity.colors is not None
+    assert not np.array_equal(intensity.colors[0], intensity.colors[1])
+
+
 def test_multitask_preview_omits_explicitly_unavailable_ground_truth(
     preview_session: RecordingBackend,
 ) -> None:
