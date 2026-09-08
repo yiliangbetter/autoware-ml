@@ -91,13 +91,15 @@ def build_lidar_reference_events(
     carry class ids and annotation contexts.
     """
     positions = ensure_xyz(points)
-    radii = np.full((positions.shape[0],), point_radius, dtype=np.float32)
+    # Rerun broadcasts a scalar radius to every point. Keeping this scalar
+    # avoids serializing an identical float once per point and per color mode.
+    radius = float(point_radius)
     events = [
         PointCloud3DEvent(
             path=f"{root_path}/lidar/solid",
             positions=positions,
             colors=point_cloud_colors(points, "solid"),
-            radii=radii,
+            radii=radius,
         )
     ]
     points_array = as_numpy(points)
@@ -107,7 +109,7 @@ def build_lidar_reference_events(
                 path=f"{root_path}/lidar/intensity",
                 positions=positions,
                 colors=point_cloud_colors(points, "intensity"),
-                radii=radii,
+                radii=radius,
             )
         )
     return events

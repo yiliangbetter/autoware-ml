@@ -208,6 +208,10 @@ segmentation-only preview; no synthetic detection objects are created.
 Each available camera is logged as a transform, pinhole calibration, and image.
 The Rerun blueprint places the camera frustums in the same 3D scene as the
 LiDAR points and boxes, enabling live 3D camera views and projection inspection.
+The backend JPEG-encodes RGB camera frames at quality 95 and broadcasts constant
+point radii instead of repeating them per point. These transport optimizations
+preserve scene geometry and calibration while keeping 10 Hz recordings usable
+over an SSH tunnel.
 Camera geometry starts hidden to keep the GT/PD point-cloud comparisons clear.
 Selecting a 3D view exposes Rerun's native visibility control for
 `/scene/cameras`; changing it shows or hides the complete camera subtree,

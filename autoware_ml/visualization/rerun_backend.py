@@ -166,7 +166,10 @@ class _RerunVisualizationBackendBase:
             return
 
         if isinstance(event, ImageEvent):
-            self.rr.log(event.path, self.rr.Image(event.image))
+            # Camera frames dominate remote recordings when logged as raw RGB.
+            # Rerun preserves the same image entity and projection behavior
+            # while JPEG compression substantially reduces memory and transfer.
+            self.rr.log(event.path, self.rr.Image(event.image).compress(jpeg_quality=95))
             return
 
         if isinstance(event, PointCloud3DEvent):

@@ -30,6 +30,7 @@ FloatArray: TypeAlias = npt.NDArray[np.float32]
 IntArray: TypeAlias = npt.NDArray[np.int64]
 ColorArray: TypeAlias = npt.NDArray[np.uint8]
 ImageArray: TypeAlias = npt.NDArray[np.uint8] | npt.NDArray[np.float32]
+Radius: TypeAlias = FloatArray | float
 
 
 @dataclass(frozen=True)
@@ -65,7 +66,7 @@ class PointCloud3DEvent:
     positions: FloatArray
     colors: ColorArray | None = None
     labels: list[str] | None = None
-    radii: FloatArray | None = None
+    radii: Radius | None = None
     class_ids: IntArray | None = None
 
 
@@ -77,7 +78,7 @@ class Points2DEvent:
     positions: FloatArray
     colors: ColorArray | None = None
     labels: list[str] | None = None
-    radii: FloatArray | None = None
+    radii: Radius | None = None
     class_ids: IntArray | None = None
 
 
@@ -91,7 +92,7 @@ class Boxes3DEvent:
     yaws: FloatArray
     colors: ColorArray | None = None
     labels: list[str] | None = None
-    radii: FloatArray | None = None
+    radii: Radius | None = None
     class_ids: IntArray | None = None
 
 

@@ -61,7 +61,7 @@ def build_segmentation3d_data_events(
         raise ValueError("labels must have the same length as points")
 
     palette = build_label_palette(resolve_palette_size([labels_np], class_names))
-    radii = np.full((point_positions.shape[0],), point_radius, dtype=np.float32)
+    radius = float(point_radius)
     label_text = _build_point_labels(labels_np, class_names, point_labels)
     events: list[VisualizationEvent] = build_sample_metadata_events(root_path, sample_name)
     semantic_path = f"{root_path}/ground_truth/segmentation"
@@ -77,7 +77,7 @@ def build_segmentation3d_data_events(
             positions=point_positions,
             colors=labels_to_colors(labels_np, palette, ignore_index=ignore_index),
             labels=label_text,
-            radii=radii,
+            radii=radius,
             class_ids=labels_np,
         )
     )
@@ -119,7 +119,7 @@ def build_segmentation3d_events(
         gt_labels_np = None
 
     palette = build_label_palette(resolve_palette_size([pred_labels_np, gt_labels_np], class_names))
-    radii = np.full((point_positions.shape[0],), point_radius, dtype=np.float32)
+    radius = float(point_radius)
     pred_label_text = _build_point_labels(pred_labels_np, class_names, point_labels)
     events: list[VisualizationEvent] = build_sample_metadata_events(root_path, sample_name)
     prediction_path = f"{root_path}/prediction/segmentation"
@@ -137,7 +137,7 @@ def build_segmentation3d_events(
             positions=point_positions,
             colors=labels_to_colors(pred_labels_np, palette, ignore_index=ignore_index),
             labels=pred_label_text,
-            radii=radii,
+            radii=radius,
             class_ids=pred_labels_np,
         )
     )
@@ -150,7 +150,7 @@ def build_segmentation3d_events(
                 positions=point_positions,
                 colors=labels_to_colors(gt_labels_np, palette, ignore_index=ignore_index),
                 labels=gt_label_text,
-                radii=radii,
+                radii=radius,
                 class_ids=gt_labels_np,
             )
         )
@@ -180,7 +180,7 @@ def build_segmentation3d_events(
                     path=f"{root_path}/prediction/entropy",
                     positions=point_positions,
                     colors=scalar_to_heatmap_colors(entropy_norm),
-                    radii=radii,
+                    radii=radius,
                 )
             )
 
@@ -211,7 +211,7 @@ def build_segmentation3d_events(
                     path=f"{root_path}/prediction/entropy",
                     positions=point_positions,
                     colors=scalar_to_heatmap_colors(entropy_norm),
-                    radii=radii,
+                    radii=radius,
                 )
             )
 

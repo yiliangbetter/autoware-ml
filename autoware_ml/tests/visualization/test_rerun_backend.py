@@ -99,6 +99,16 @@ class _FakeAnnotationContext:
 def _build_fake_rerun(calls: dict[str, Any]) -> Any:
     """Build a fake ``rerun`` module that records every call it receives."""
 
+    class _FakeImage:
+        def __init__(self, image: Any) -> None:
+            self.image = image
+
+        def compress(self, *, jpeg_quality: int) -> tuple[str, dict[str, Any]]:
+            return (
+                "EncodedImage",
+                {"image": self.image, "jpeg_quality": jpeg_quality},
+            )
+
     class _FakeRecording:
         @staticmethod
         def flush(*, blocking: bool) -> None:
@@ -198,8 +208,8 @@ def _build_fake_rerun(calls: dict[str, Any]) -> Any:
             return kwargs
 
         @staticmethod
-        def Image(image: Any) -> tuple[str, Any]:
-            return ("Image", image)
+        def Image(image: Any) -> _FakeImage:
+            return _FakeImage(image)
 
         @staticmethod
         def Points3D(*args: Any, **kwargs: Any) -> tuple[str, tuple[Any, ...], dict[str, Any]]:
@@ -370,7 +380,7 @@ def test_backend_translates_every_supported_event(
 
     logged_kinds = [payload[0] for _, payload, _ in rerun_calls["logs"]]
     assert logged_kinds == [
-        "Image",
+        "EncodedImage",
         "Points3D",
         "Points2D",
         "Boxes3D",
@@ -380,6 +390,19 @@ def test_backend_translates_every_supported_event(
         "Clear",
     ]
     assert rerun_calls["blueprints"]
+
+
+def test_backend_compresses_images_for_remote_streaming(
+    backend: RerunVisualizationBackend, rerun_calls: dict[str, Any]
+) -> None:
+    image = np.zeros((4, 4, 3), dtype=np.uint8)
+
+    backend.log_event(ImageEvent(path="scene/cameras/front", image=image))
+
+    encoded = _logged(rerun_calls, "scene/cameras/front")[0]
+    assert encoded[0] == "EncodedImage"
+    assert encoded[1]["jpeg_quality"] == 95
+    assert encoded[1]["image"] is image
 
 
 def test_backend_builds_named_comparison_views_without_root_origins(
