@@ -179,13 +179,12 @@ def build_calibration_status_events(
             )
             if projected_points.shape[0] > 0:
                 overlay_colors = depths_to_colors(point_depths)
-                overlay_radii = np.full((projected_points.shape[0],), 2.0, dtype=np.float32)
                 events.append(
                     Points2DEvent(
                         path=f"{root_path}/camera/image/projected_points",
                         positions=projected_points,
                         colors=overlay_colors,
-                        radii=overlay_radii,
+                        radii=2.0,
                     )
                 )
                 events.append(
@@ -205,7 +204,7 @@ def build_calibration_status_events(
                     f"{fused_path}/depth",
                     positions=depth_positions,
                     colors=depth_colors,
-                    radii=np.full((depth_positions.shape[0],), 2.0, dtype=np.float32),
+                    radii=2.0,
                 )
             )
         intensity_positions, intensity_colors = _fused_channel_points(fused_image, 4)
@@ -215,7 +214,7 @@ def build_calibration_status_events(
                     f"{fused_path}/intensity",
                     positions=intensity_positions,
                     colors=intensity_colors,
-                    radii=np.full((intensity_positions.shape[0],), 2.0, dtype=np.float32),
+                    radii=2.0,
                 )
             )
 
