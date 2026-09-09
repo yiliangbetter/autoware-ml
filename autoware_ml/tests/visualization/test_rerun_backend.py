@@ -464,6 +464,8 @@ def test_backend_builds_named_comparison_views_without_root_origins(
             ),
             ScalarEvent(path="scene/metrics/detection/precision", value=1.0),
             ScalarEvent(path="scene/metrics/detection/recall", value=1.0),
+            ScalarEvent(path="scene/metrics/detection/mean_best_iou", value=1.0),
+            ScalarEvent(path="scene/metrics/detection/max_iou", value=1.0),
             ScalarEvent(path="scene/metrics/detection/mean_matched_iou", value=1.0),
             ScalarEvent(path="scene/metrics/detection/true_positives", value=20.0),
             ScalarEvent(path="scene/metrics/detection/false_positives", value=12.0),
@@ -479,6 +481,9 @@ def test_backend_builds_named_comparison_views_without_root_origins(
     assert "GT · Intensity" in serialized
     assert "Prediction · Entropy" in serialized
     assert "3D IoU quality" in serialized
+    assert "GT mean best IoU" in serialized
+    assert "Frame max IoU" in serialized
+    assert "Matched mean IoU (>=0.5)" in serialized
     assert (
         "'/scene/cameras': {'kind': 'EntityBehavior', 'args': (), 'visible': False}" in serialized
     )

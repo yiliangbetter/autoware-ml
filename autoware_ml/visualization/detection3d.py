@@ -311,7 +311,12 @@ def detection_iou_statistics(
     *,
     iou_threshold: float = 0.5,
 ) -> dict[str, float]:
-    """Greedily match same-class boxes and return frame-level statistics."""
+    """Greedily match same-class boxes and return frame-level statistics.
+
+    Besides threshold-qualified detection metrics, report the best overlap for
+    every GT box before applying the threshold.  This keeps the quality signal
+    informative when a model has near misses but no true positives yet.
+    """
     candidates = [
         (oriented_box_iou_3d(pred_boxes[p], gt_boxes[g]), p, g)
         for p in range(len(pred_boxes))
@@ -333,6 +338,13 @@ def detection_iou_statistics(
     true_positives = len(matched)
     false_positives = len(pred_boxes) - true_positives
     false_negatives = len(gt_boxes) - true_positives
+    best_iou_per_ground_truth = [
+        max(
+            (iou for iou, _, candidate_ground_truth in candidates if candidate_ground_truth == g),
+            default=0.0,
+        )
+        for g in range(len(gt_boxes))
+    ]
     return {
         "iou_threshold": float(iou_threshold),
         "true_positives": float(true_positives),
@@ -340,5 +352,9 @@ def detection_iou_statistics(
         "false_negatives": float(false_negatives),
         "precision": true_positives / len(pred_boxes) if len(pred_boxes) else 0.0,
         "recall": true_positives / len(gt_boxes) if len(gt_boxes) else 0.0,
+        "mean_best_iou": (
+            float(np.mean(best_iou_per_ground_truth)) if best_iou_per_ground_truth else 0.0
+        ),
+        "max_iou": max((item[0] for item in candidates), default=0.0),
         "mean_matched_iou": float(np.mean([item[0] for item in matched])) if matched else 0.0,
     }

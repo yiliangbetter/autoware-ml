@@ -45,7 +45,9 @@ logger = logging.getLogger(__name__)
 _DETECTION_METRIC_LABELS = {
     "precision": "Precision",
     "recall": "Recall",
-    "mean_matched_iou": "Mean matched IoU",
+    "mean_best_iou": "GT mean best IoU",
+    "max_iou": "Frame max IoU",
+    "mean_matched_iou": "Matched mean IoU (>=0.5)",
     "true_positives": "True positives",
     "false_positives": "False positives",
     "false_negatives": "False negatives",
@@ -365,7 +367,13 @@ class _RerunVisualizationBackendBase:
         metrics_root = "scene/metrics/detection"
         quality_paths = [
             f"{metrics_root}/{name}"
-            for name in ("precision", "recall", "mean_matched_iou")
+            for name in (
+                "precision",
+                "recall",
+                "mean_best_iou",
+                "max_iou",
+                "mean_matched_iou",
+            )
             if f"{metrics_root}/{name}" in self._observed_paths
         ]
         count_paths = [
