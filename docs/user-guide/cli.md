@@ -217,7 +217,7 @@ Current visualization coverage:
 
 - calibration status: camera image, projected lidar overlay, fused image, status labels, and confidence summary
 - segmentation3d: GT/PD point clouds, semantic/intensity/solid coloring, and pointwise entropy computed from prediction logits
-- detection3d: GT/PD boxes overlaid on point clouds with same-class, yaw-aware 3D IoU statistics; line-and-point plots include pre-threshold best-overlap signals, remain readable with a single GT keyframe, and expose exact values on hover
+- detection3d: GT/PD boxes overlaid on point clouds with prediction labels initially hidden to avoid proposal clutter; labels remain available through Rerun's **Show labels** property, while line-and-point plots include same-class yaw-aware 3D IoU and pre-threshold best-overlap signals
 - multi-task PTv3: combined segmentation and detection comparisons, optional calibrated live 3D camera frustums, and 10 Hz prediction-only intermediate frames between 1 Hz GT anchors
 
 ## mlflow ui
