@@ -111,6 +111,8 @@ def test_build_detection3d_events_logs_frame_metrics() -> None:
     assert metrics["scene/metrics/detection/num_ground_truth"] == 1.0
     assert metrics["scene/metrics/detection/mean_score"] == pytest.approx(0.9)
     assert metrics["scene/metrics/detection/true_positives"] == 1.0
+    assert metrics["scene/metrics/detection/mean_best_iou"] == pytest.approx(1.0)
+    assert metrics["scene/metrics/detection/max_iou"] == pytest.approx(1.0)
     assert metrics["scene/metrics/detection/mean_matched_iou"] == pytest.approx(1.0)
 
 
@@ -126,6 +128,25 @@ def test_detection_iou_matches_same_class_boxes_only() -> None:
     )
     assert stats["true_positives"] == 0.0
     assert stats["false_positives"] == 2.0
+    assert stats["mean_best_iou"] == 0.0
+    assert stats["max_iou"] == 0.0
+
+
+def test_detection_iou_reports_near_misses_before_thresholding() -> None:
+    shifted = _ONE_BOX.copy()
+    shifted[0, 0] += 2.0
+
+    stats = detection_iou_statistics(
+        shifted,
+        np.array([1]),
+        _ONE_BOX,
+        np.array([1]),
+    )
+
+    assert stats["true_positives"] == 0.0
+    assert stats["mean_matched_iou"] == 0.0
+    assert 0.0 < stats["mean_best_iou"] < 0.5
+    assert stats["max_iou"] == pytest.approx(stats["mean_best_iou"])
 
 
 def test_build_detection3d_events_legend_covers_every_declared_class() -> None:

@@ -198,6 +198,8 @@ The detection adapter can log:
 - same-class, yaw-aware 3D IoU matching at threshold 0.5, with per-frame
   true-positive, false-positive, false-negative, precision, recall, and mean
   matched-IoU scalars
+- threshold-independent mean-best-GT and frame-maximum IoU scalars, so near
+  misses remain visible even when no prediction reaches the matching threshold
 
 Detection and segmentation use sibling `scene/prediction` and
 `scene/ground_truth` entities. A frame with no detection annotations remains a
