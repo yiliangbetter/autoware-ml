@@ -346,20 +346,22 @@ class _RerunVisualizationBackendBase:
             contents.append(detection_path)
         if self._camera_paths:
             contents.append("scene/cameras/**")
-        overrides = (
-            {
-                "/scene/cameras": self.rr.blueprint.EntityBehavior(
-                    visible=self.camera_frustums_visible
-                )
-            }
-            if self._camera_paths
-            else None
-        )
+        overrides = {}
+        if self._camera_paths:
+            overrides["/scene/cameras"] = self.rr.blueprint.EntityBehavior(
+                visible=self.camera_frustums_visible
+            )
+        if detection_path is not None and detection_path.startswith("scene/prediction/"):
+            # Decoded detectors can legitimately emit hundreds of proposals.
+            # Keep every box and its label in the recording, but hide floating
+            # prediction labels initially so they do not cover the point cloud.
+            # Rerun's Show labels property remains editable live in the viewer.
+            overrides[f"/{detection_path}"] = self.rr.Boxes3D(show_labels=False)
         return self.rr.blueprint.Spatial3DView(
             name=name,
             origin="scene",
             contents=contents,
-            overrides=overrides,
+            overrides=overrides or None,
         )
 
     def _detection_statistics_views(self) -> list[Any]:

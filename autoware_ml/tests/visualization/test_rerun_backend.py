@@ -487,6 +487,7 @@ def test_backend_builds_named_comparison_views_without_root_origins(
     assert (
         "'/scene/cameras': {'kind': 'EntityBehavior', 'args': (), 'visible': False}" in serialized
     )
+    assert "'/scene/prediction/detections': ('Boxes3D', {'show_labels': False})" in serialized
     assert "'origin': '/'" not in serialized
     assert "'auto_views': False" in serialized
     assert "'kind': 'TimePanel', 'args': (), 'expanded': False" in serialized

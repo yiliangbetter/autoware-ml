@@ -214,6 +214,10 @@ The backend JPEG-encodes RGB camera frames at quality 95 and broadcasts constant
 point radii instead of repeating them per point. These transport optimizations
 preserve scene geometry and calibration while keeping 10 Hz recordings usable
 over an SSH tunnel.
+Prediction box labels remain recorded but start hidden in 3D comparisons, since
+raw decoded outputs can contain hundreds of proposals whose floating labels
+would obscure the point cloud. Select the prediction detection entity and use
+Rerun's **Show labels** property to reveal them dynamically when needed.
 Camera geometry starts hidden to keep the GT/PD point-cloud comparisons clear.
 When calibrated cameras are present, the Blueprint panel starts expanded and
 shows Rerun's eye control beside the `cameras` subtree in each 3D view. This
