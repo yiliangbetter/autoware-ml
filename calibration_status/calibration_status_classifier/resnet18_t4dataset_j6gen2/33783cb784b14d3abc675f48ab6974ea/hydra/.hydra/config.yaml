@@ -1,0 +1,384 @@
+callbacks:
+  model_checkpoint:
+    _target_: lightning.pytorch.callbacks.ModelCheckpoint
+    monitor: val/loss
+    dirpath: ${hydra:run.dir}/checkpoints
+    filename: best
+    save_top_k: 1
+    mode: min
+    verbose: true
+  model_checkpoint_last:
+    _target_: lightning.pytorch.callbacks.ModelCheckpoint
+    dirpath: ${hydra:run.dir}/checkpoints
+    filename: last
+    save_top_k: 1
+    enable_version_counter: false
+    every_n_train_steps: 100
+  early_stopping:
+    _target_: autoware_ml.callbacks.early_stopping.EarlyStopping
+    monitor: val/loss
+    patience: 20
+    mode: min
+  lr_monitor:
+    _target_: lightning.pytorch.callbacks.LearningRateMonitor
+    logging_interval: step
+data_preprocessing:
+  _target_: autoware_ml.preprocessing.base.DataPreprocessing
+  pipeline: []
+datamodule:
+  train_dataloader_cfg:
+    pin_memory: true
+    persistent_workers: true
+    drop_last: false
+    shuffle: true
+    batch_size: ${batch_size}
+    num_workers: ${num_workers}
+  val_dataloader_cfg:
+    pin_memory: true
+    persistent_workers: true
+    drop_last: false
+    shuffle: false
+    batch_size: ${batch_size}
+    num_workers: ${num_workers}
+  test_dataloader_cfg:
+    pin_memory: true
+    persistent_workers: true
+    drop_last: false
+    shuffle: false
+    batch_size: ${batch_size}
+    num_workers: ${num_workers}
+  predict_dataloader_cfg:
+    pin_memory: true
+    persistent_workers: true
+    drop_last: false
+    shuffle: false
+  train_transforms:
+    _target_: autoware_ml.transforms.base.TransformsCompose
+    pipeline:
+    - _target_: autoware_ml.transforms.camera.loading.LoadImageFromFile
+    - _target_: autoware_ml.transforms.point_cloud.loading.LoadPointsFromFile
+      use_dim:
+      - 0
+      - 1
+      - 2
+      - 3
+      - 4
+    - _target_: autoware_ml.transforms.point_cloud.crop.CropBoxInner
+      crop_box:
+      - -1.53
+      - -1.15
+      - -0.1
+      - 5.72
+      - 1.15
+      - 3.1
+    - _target_: autoware_ml.transforms.camera.distortion.UndistortImage
+      alpha: 0.0
+    - _target_: autoware_ml.transforms.camera_lidar.camera_lidar.CalibrationMisalignment
+      p: 0.5
+      activate_roll: true
+      activate_pitch: true
+      activate_yaw: true
+      activate_x: true
+      activate_y: true
+      activate_z: true
+      min_roll_neg: 0.2
+      max_roll_neg: 0.4
+      min_roll_pos: 0.2
+      max_roll_pos: 0.4
+      min_pitch_neg: 0.2
+      max_pitch_neg: 0.4
+      min_pitch_pos: 0.2
+      max_pitch_pos: 0.4
+      min_yaw_neg: 4.2
+      max_yaw_neg: 8.4
+      min_yaw_pos: 4.2
+      max_yaw_pos: 8.4
+      min_x_neg: 0.22
+      max_x_neg: 0.44
+      min_x_pos: 0.22
+      max_x_pos: 0.44
+      min_y_neg: 0.12
+      max_y_neg: 0.24
+      min_y_pos: 0.06
+      max_y_pos: 0.12
+      min_z_neg: 0.24
+      max_z_neg: 0.48
+      min_z_pos: 0.54
+      max_z_pos: 1.08
+    - _target_: autoware_ml.transforms.camera.resize.CropAndScale
+      p: 0.2
+      crop_ratio: 0.8
+    - _target_: autoware_ml.transforms.camera_lidar.camera_lidar.Affine
+      p: 0.2
+      max_distortion: 0.05
+    - _target_: autoware_ml.transforms.image.image.PhotometricDistortion
+      p: 0.2
+      brightness: 0.1
+      contrast: 0.1
+      saturation: 0.1
+      hue: 0.05
+    - _target_: autoware_ml.transforms.camera_lidar.camera_lidar.LidarCameraFusion
+      max_depth: 128.0
+      dilation_size: 1
+      ego_box:
+      - -1.53
+      - -1.15
+      - -0.1
+      - 5.72
+      - 1.15
+      - 3.1
+    - _target_: autoware_ml.transforms.camera_lidar.camera_lidar.SaveFusionPreview
+      p: 1.0e-05
+      out_dir: ${hydra:run.dir}/previews
+      max_depth: 128.0
+      alpha: 1.0
+      depth_colormap: jet
+      intensity_colormap: turbo
+    - _target_: autoware_ml.transforms.common.tensor.PermuteAxes
+      input_keys:
+      - fused_img
+      axes:
+      - 2
+      - 0
+      - 1
+  val_transforms:
+    _target_: autoware_ml.transforms.base.TransformsCompose
+    pipeline:
+    - _target_: autoware_ml.transforms.camera.loading.LoadImageFromFile
+    - _target_: autoware_ml.transforms.point_cloud.loading.LoadPointsFromFile
+      use_dim:
+      - 0
+      - 1
+      - 2
+      - 3
+      - 4
+    - _target_: autoware_ml.transforms.point_cloud.crop.CropBoxInner
+      crop_box:
+      - -1.53
+      - -1.15
+      - -0.1
+      - 5.72
+      - 1.15
+      - 3.1
+    - _target_: autoware_ml.transforms.camera.distortion.UndistortImage
+      alpha: 0.0
+    - _target_: autoware_ml.transforms.camera_lidar.camera_lidar.CalibrationMisalignment
+      p: 0.5
+      activate_roll: true
+      activate_pitch: true
+      activate_yaw: true
+      activate_x: true
+      activate_y: true
+      activate_z: true
+      min_roll_neg: 0.2
+      max_roll_neg: 0.4
+      min_roll_pos: 0.2
+      max_roll_pos: 0.4
+      min_pitch_neg: 0.2
+      max_pitch_neg: 0.4
+      min_pitch_pos: 0.2
+      max_pitch_pos: 0.4
+      min_yaw_neg: 4.2
+      max_yaw_neg: 8.4
+      min_yaw_pos: 4.2
+      max_yaw_pos: 8.4
+      min_x_neg: 0.22
+      max_x_neg: 0.44
+      min_x_pos: 0.22
+      max_x_pos: 0.44
+      min_y_neg: 0.12
+      max_y_neg: 0.24
+      min_y_pos: 0.06
+      max_y_pos: 0.12
+      min_z_neg: 0.24
+      max_z_neg: 0.48
+      min_z_pos: 0.54
+      max_z_pos: 1.08
+    - _target_: autoware_ml.transforms.camera_lidar.camera_lidar.LidarCameraFusion
+      max_depth: 128.0
+      dilation_size: 1
+      ego_box:
+      - -1.53
+      - -1.15
+      - -0.1
+      - 5.72
+      - 1.15
+      - 3.1
+    - _target_: autoware_ml.transforms.common.tensor.PermuteAxes
+      input_keys:
+      - fused_img
+      axes:
+      - 2
+      - 0
+      - 1
+  test_transforms: ${datamodule.val_transforms}
+  predict_transforms:
+    _target_: autoware_ml.transforms.base.TransformsCompose
+    pipeline:
+    - _target_: autoware_ml.transforms.camera.loading.LoadImageFromFile
+    - _target_: autoware_ml.transforms.point_cloud.loading.LoadPointsFromFile
+      use_dim:
+      - 0
+      - 1
+      - 2
+      - 3
+      - 4
+    - _target_: autoware_ml.transforms.point_cloud.crop.CropBoxInner
+      crop_box:
+      - -1.53
+      - -1.15
+      - -0.1
+      - 5.72
+      - 1.15
+      - 3.1
+    - _target_: autoware_ml.transforms.camera.distortion.UndistortImage
+      alpha: 0.0
+    - _target_: autoware_ml.transforms.camera_lidar.camera_lidar.CalibrationMisalignment
+      p: 0.5
+      activate_roll: true
+      activate_pitch: true
+      activate_yaw: true
+      activate_x: true
+      activate_y: true
+      activate_z: true
+      min_roll_neg: 0.2
+      max_roll_neg: 0.4
+      min_roll_pos: 0.2
+      max_roll_pos: 0.4
+      min_pitch_neg: 0.2
+      max_pitch_neg: 0.4
+      min_pitch_pos: 0.2
+      max_pitch_pos: 0.4
+      min_yaw_neg: 4.2
+      max_yaw_neg: 8.4
+      min_yaw_pos: 4.2
+      max_yaw_pos: 8.4
+      min_x_neg: 0.22
+      max_x_neg: 0.44
+      min_x_pos: 0.22
+      max_x_pos: 0.44
+      min_y_neg: 0.12
+      max_y_neg: 0.24
+      min_y_pos: 0.06
+      max_y_pos: 0.12
+      min_z_neg: 0.24
+      max_z_neg: 0.48
+      min_z_pos: 0.54
+      max_z_pos: 1.08
+    - _target_: autoware_ml.transforms.camera_lidar.camera_lidar.LidarCameraFusion
+      max_depth: 128.0
+      dilation_size: 1
+      ego_box:
+      - -1.53
+      - -1.15
+      - -0.1
+      - 5.72
+      - 1.15
+      - 3.1
+    - _target_: autoware_ml.transforms.common.tensor.PermuteAxes
+      input_keys:
+      - fused_img
+      axes:
+      - 2
+      - 0
+      - 1
+  collation_map:
+    fused_img: stack
+    gt_calibration_status: stack
+  _target_: autoware_ml.datamodule.t4dataset.calibration_status.T4CalibrationDataModule
+  data_root: ${data_root}
+  train_ann_file: ${data_root}/calibration_info/t4dataset_gen2_base_infos_train.pkl
+  val_ann_file: ${data_root}/calibration_info/t4dataset_gen2_base_infos_val.pkl
+  test_ann_file: ${data_root}/calibration_info/t4dataset_gen2_base_infos_test.pkl
+deploy:
+  onnx:
+    enabled: true
+    dynamo: true
+    opset_version: 21
+    modify_graph: null
+    modules:
+      end_to_end:
+        input_names:
+        - input
+        output_names:
+        - output
+        dynamic_shapes:
+          fused_img:
+            2: height
+            3: width
+  tensorrt:
+    enabled: true
+    workspace_size: 4294967296
+    input_shapes:
+      input:
+        min_shape:
+        - 1
+        - 5
+        - 1080
+        - 1920
+        opt_shape:
+        - 1
+        - 5
+        - 1860
+        - 2880
+        max_shape:
+        - 1
+        - 5
+        - 2160
+        - 3840
+logger:
+  _target_: lightning.pytorch.loggers.MLFlowLogger
+  tracking_uri: sqlite:////workspace/autoware_training_calibration.db
+model:
+  optimizer:
+    _partial_: true
+    _target_: torch.optim.AdamW
+    lr: 0.001
+    weight_decay: 0.01
+    betas:
+    - 0.9
+    - 0.999
+    eps: 1.0e-08
+  scheduler:
+    _partial_: true
+    _target_: torch.optim.lr_scheduler.CosineAnnealingLR
+    T_max: 30
+    eta_min: 1.0e-08
+    last_epoch: -1
+  _target_: autoware_ml.models.calibration_status.calibration_status.CalibrationStatusClassifier
+  backbone:
+    _target_: autoware_ml.models.common.backbones.resnet.ResNet18
+    in_channels: 5
+  neck:
+    _target_: autoware_ml.models.common.necks.global_average_pooling.GlobalAveragePooling
+  head:
+    _target_: autoware_ml.models.common.heads.linear_cls_head.LinearClsHead
+    num_classes: 2
+    in_channels: 512
+    loss:
+      _target_: torch.nn.CrossEntropyLoss
+    topk:
+    - 1
+    cal_acc: true
+seed: 3407
+trainer:
+  _target_: lightning.Trainer
+  max_epochs: 30
+  accelerator: gpu
+  strategy: auto
+  devices: 1
+  precision: 16-mixed
+  deterministic: warn
+  log_every_n_steps: 50
+  val_check_interval: 1.0
+  check_val_every_n_epoch: 1
+  accumulate_grad_batches: 1
+  enable_progress_bar: true
+  enable_model_summary: true
+  gradient_clip_val: 10.0
+  gradient_clip_algorithm: norm
+  max_time: 00:00:05:00
+  num_sanity_val_steps: 0
+batch_size: 1
+num_workers: 4
+data_root: ${oc.env:AUTOWARE_ML_DATA_PATH}/t4dataset

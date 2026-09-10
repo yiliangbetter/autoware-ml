@@ -1,0 +1,427 @@
+callbacks:
+  model_checkpoint:
+    _target_: lightning.pytorch.callbacks.ModelCheckpoint
+    monitor: val/loss
+    dirpath: ${hydra:run.dir}/checkpoints
+    filename: best
+    save_top_k: 1
+    mode: min
+    verbose: true
+  model_checkpoint_last:
+    _target_: lightning.pytorch.callbacks.ModelCheckpoint
+    dirpath: ${hydra:run.dir}/checkpoints
+    filename: last
+    save_top_k: 1
+    enable_version_counter: false
+    every_n_train_steps: 100
+  early_stopping:
+    _target_: autoware_ml.callbacks.early_stopping.EarlyStopping
+    monitor: val/loss
+    patience: 20
+    mode: min
+  lr_monitor:
+    _target_: lightning.pytorch.callbacks.LearningRateMonitor
+    logging_interval: step
+data_preprocessing:
+  _target_: autoware_ml.preprocessing.base.DataPreprocessing
+  pipeline: []
+datamodule:
+  train_dataloader_cfg:
+    pin_memory: true
+    persistent_workers: true
+    drop_last: false
+    shuffle: true
+    batch_size: ${batch_size}
+    num_workers: ${num_workers}
+  val_dataloader_cfg:
+    pin_memory: true
+    persistent_workers: true
+    drop_last: false
+    shuffle: false
+    batch_size: ${batch_size}
+    num_workers: ${num_workers}
+  test_dataloader_cfg:
+    pin_memory: true
+    persistent_workers: true
+    drop_last: false
+    shuffle: false
+    batch_size: ${batch_size}
+    num_workers: ${num_workers}
+  predict_dataloader_cfg:
+    pin_memory: true
+    persistent_workers: true
+    drop_last: false
+    shuffle: false
+  train_transforms:
+    _target_: autoware_ml.transforms.base.TransformsCompose
+    pipeline:
+    - _target_: autoware_ml.transforms.point_cloud.loading.LoadPointsFromFile
+      load_dim: 5
+      use_dim:
+      - 0
+      - 1
+      - 2
+      - 3
+    - _target_: autoware_ml.transforms.segmentation3d.loading.LoadSegAnnotations3D
+      class_mapping: ${dataset.segmentation3d.class_mapping}
+      ignore_index: ${dataset.segmentation3d.ignore_index}
+    - _target_: autoware_ml.transforms.point_cloud.formatting.PreparePointCloudInput
+    - _target_: autoware_ml.transforms.segmentation3d.formatting.PreparePointSegInput
+    - _target_: autoware_ml.transforms.point_cloud.geometry.GlobalRotScaleTrans
+      rot_range:
+      - -3.14159
+      - 3.14159
+      scale_ratio_range:
+      - 0.9
+      - 1.1
+    - _target_: autoware_ml.transforms.point_cloud.geometry.RandomFlip3D
+      flip_ratio_bev_horizontal: 0.5
+      flip_ratio_bev_vertical: 0.5
+    - _target_: autoware_ml.transforms.point_cloud.crop.PointsRangeFilter
+      point_cloud_range: ${point_cloud_range}
+    - _target_: autoware_ml.transforms.point_cloud.perturbation.RandomJitter
+      sigma: 0.005
+      clip: 0.02
+    - _target_: autoware_ml.transforms.point_cloud.crop.SphereCrop
+      point_max: 128000
+      mode: random
+    - _target_: autoware_ml.transforms.common.copying.Copy
+      keys_dict:
+        segment: origin_segment
+        coord: origin_coord
+    - _target_: autoware_ml.transforms.point_cloud.sampling.GridSample
+      grid_size: ${grid_size}
+      point_cloud_range: ${point_cloud_range}
+      hash_type: fnv
+      mode: train
+      keys:
+      - coord
+      - strength
+      - segment
+      return_inverse: true
+      return_grid_coord: true
+    - _target_: autoware_ml.transforms.common.packing.BuildPointFeatures
+      keys:
+      - coord
+      - strength
+      output_key: feat
+  val_transforms:
+    _target_: autoware_ml.transforms.base.TransformsCompose
+    pipeline:
+    - _target_: autoware_ml.transforms.point_cloud.loading.LoadPointsFromFile
+      load_dim: 5
+      use_dim:
+      - 0
+      - 1
+      - 2
+      - 3
+    - _target_: autoware_ml.transforms.segmentation3d.loading.LoadSegAnnotations3D
+      class_mapping: ${dataset.segmentation3d.class_mapping}
+      ignore_index: ${dataset.segmentation3d.ignore_index}
+    - _target_: autoware_ml.transforms.point_cloud.formatting.PreparePointCloudInput
+    - _target_: autoware_ml.transforms.segmentation3d.formatting.PreparePointSegInput
+    - _target_: autoware_ml.transforms.point_cloud.crop.PointsRangeFilter
+      point_cloud_range: ${point_cloud_range}
+    - _target_: autoware_ml.transforms.common.copying.Copy
+      keys_dict:
+        segment: origin_segment
+        coord: origin_coord
+    - _target_: autoware_ml.transforms.point_cloud.sampling.GridSample
+      grid_size: ${grid_size}
+      point_cloud_range: ${point_cloud_range}
+      hash_type: fnv
+      mode: test
+      keys:
+      - coord
+      - strength
+      - segment
+      return_inverse: true
+      return_grid_coord: true
+    - _target_: autoware_ml.transforms.common.packing.BuildPointFeatures
+      keys:
+      - coord
+      - strength
+      output_key: feat
+  test_transforms: ${datamodule.val_transforms}
+  predict_transforms:
+    _target_: autoware_ml.transforms.base.TransformsCompose
+    pipeline:
+    - _target_: autoware_ml.transforms.point_cloud.loading.LoadPointsFromFile
+      load_dim: 5
+      use_dim:
+      - 0
+      - 1
+      - 2
+      - 3
+    - _target_: autoware_ml.transforms.point_cloud.formatting.PreparePointCloudInput
+    - _target_: autoware_ml.transforms.segmentation3d.formatting.PreparePointSegInput
+    - _target_: autoware_ml.transforms.point_cloud.crop.PointsRangeFilter
+      point_cloud_range: ${point_cloud_range}
+    - _target_: autoware_ml.transforms.point_cloud.sampling.GridSample
+      grid_size: ${grid_size}
+      point_cloud_range: ${point_cloud_range}
+      hash_type: fnv
+      mode: test
+      keys:
+      - coord
+      - strength
+      return_inverse: true
+      return_grid_coord: true
+    - _target_: autoware_ml.transforms.common.packing.BuildPointFeatures
+      keys:
+      - coord
+      - strength
+      output_key: feat
+  collation_map:
+    coord: concat
+    grid_coord: concat
+    segment: concat
+    inverse: index_concat
+    origin_segment: concat
+    origin_coord: concat
+    feat: concat
+  _target_: autoware_ml.datamodule.t4dataset.segmentation3d.T4Segmentation3DDataModule
+  data_root: ${dataset.data_root}
+  train_ann_file: ${datamodule.data_root}/info/lidarseg/t4dataset_j6gen2_lidarseg_infos_train.pkl
+  val_ann_file: ${datamodule.data_root}/info/lidarseg/t4dataset_j6gen2_lidarseg_infos_val.pkl
+  test_ann_file: ${datamodule.data_root}/info/lidarseg/t4dataset_j6gen2_lidarseg_infos_test.pkl
+deploy:
+  onnx:
+    enabled: true
+    dynamo: false
+    opset_version: 17
+    modify_graph: null
+    do_constant_folding: false
+    modules:
+      encoder:
+        output_names:
+        - point_feat_0
+        - point_feat_1
+        - point_feat_2
+        - point_feat_3
+        - point_feat_4
+      seg3d_head:
+        output_names:
+        - pred_labels
+        - pred_probs
+  tensorrt:
+    enabled: false
+    workspace_size: 4294967296
+logger:
+  _target_: lightning.pytorch.loggers.MLFlowLogger
+  tracking_uri: sqlite:////workspace/autoware_training_segmentation.db
+model:
+  optimizer:
+    _partial_: true
+    _target_: torch.optim.AdamW
+    lr: 0.002
+    weight_decay: 0.005
+  scheduler:
+    _partial_: true
+    _target_: torch.optim.lr_scheduler.OneCycleLR
+    max_lr:
+    - 0.002
+    - 0.0002
+    pct_start: 0.04
+    anneal_strategy: cos
+    div_factor: 10.0
+    final_div_factor: 100.0
+  encoder:
+    _target_: autoware_ml.models.segmentation3d.encoders.ptv3.PointTransformerV3Encoder
+    in_channels: 4
+    order:
+    - z
+    - z-trans
+    - hilbert
+    - hilbert-trans
+    stride:
+    - 2
+    - 2
+    - 2
+    - 2
+    enc_depths:
+    - 2
+    - 2
+    - 2
+    - 2
+    - 2
+    enc_channels:
+    - 32
+    - 64
+    - 128
+    - 256
+    - 512
+    enc_num_head:
+    - 2
+    - 4
+    - 8
+    - 16
+    - 32
+    enc_patch_size:
+    - 512
+    - 512
+    - 512
+    - 512
+    - 512
+    mlp_ratio: 4
+    qkv_bias: true
+    qk_scale: null
+    attn_drop: 0.0
+    proj_drop: 0.0
+    drop_path: 0.3
+    pre_norm: true
+    shuffle_orders: true
+    enable_rpe: false
+    enable_flash: true
+    upcast_attention: false
+    upcast_softmax: false
+  seg3d_head:
+    _target_: autoware_ml.models.segmentation3d.heads.ptv3.PTv3SegDecoderHead
+    num_classes: ${dataset.segmentation3d.num_classes}
+    ignore_index: ${dataset.segmentation3d.ignore_index}
+    order: ${model.encoder.order}
+    enc_channels: ${model.encoder.enc_channels}
+    dec_depths:
+    - 0
+    - 0
+    - 1
+    - 1
+    dec_channels:
+    - 64
+    - 64
+    - 128
+    - 256
+    dec_num_head:
+    - 4
+    - 4
+    - 8
+    - 16
+    dec_patch_size:
+    - 512
+    - 512
+    - 512
+    - 512
+    mlp_ratio: ${model.encoder.mlp_ratio}
+    qkv_bias: ${model.encoder.qkv_bias}
+    qk_scale: ${model.encoder.qk_scale}
+    attn_drop: ${model.encoder.attn_drop}
+    proj_drop: ${model.encoder.proj_drop}
+    drop_path: ${model.encoder.drop_path}
+    pre_norm: ${model.encoder.pre_norm}
+    enable_rpe: ${model.encoder.enable_rpe}
+    enable_flash: ${model.encoder.enable_flash}
+    upcast_attention: ${model.encoder.upcast_attention}
+    upcast_softmax: ${model.encoder.upcast_softmax}
+    lovasz_weight: 1.0
+  _target_: autoware_ml.models.segmentation3d.ptv3.PTv3SegmentationModel
+  metrics: ${dataset.segmentation3d.metrics}
+  grid_size: ${grid_size}
+  point_cloud_range: ${point_cloud_range}
+  optimizer_group_overrides:
+    block:
+      lr: 0.0002
+  scheduler_config:
+    interval: step
+seed: 3407
+trainer:
+  _target_: lightning.Trainer
+  max_epochs: 50
+  accelerator: gpu
+  strategy: auto
+  devices: 1
+  precision: 16-mixed
+  deterministic: warn
+  log_every_n_steps: 50
+  val_check_interval: 1.0
+  check_val_every_n_epoch: 1
+  accumulate_grad_batches: 1
+  enable_progress_bar: true
+  enable_model_summary: true
+  gradient_clip_val: 10.0
+  max_time: 00:00:05:00
+  num_sanity_val_steps: 0
+dataset: ${t4dataset}
+grid_size: 0.12
+point_cloud_range:
+- -122.88
+- -122.88
+- -3.0
+- 122.88
+- 122.88
+- 5.0
+t4dataset:
+  data_root: ${oc.env:AUTOWARE_ML_DATA_PATH}/t4dataset
+  segmentation3d:
+    ignore_index: -1
+    class_mapping:
+      car: 0
+      emergency_vehicle: 0
+      forklift: 0
+      kart: 0
+      truck: 1
+      tractor_unit: 1
+      semi_trailer: 1
+      construction_vehicle: 1
+      bus: 2
+      motorcycle: 3
+      bicycle: 3
+      pedestrian: 4
+      personal_mobility: 4
+      stroller: 4
+      traffic_cone: 5
+      barrier: 6
+      debris: 7
+      pushable_pullable: 7
+      drivable_surface: 8
+      other_flat_surface: 9
+      sidewalk: 9
+      vegetation: 10
+      manmade: 11
+      vertical_thin: 12
+      other_stuff: 13
+      noise: 14
+      animal: ${t4dataset.segmentation3d.ignore_index}
+      train: ${t4dataset.segmentation3d.ignore_index}
+      ghost_point: ${t4dataset.segmentation3d.ignore_index}
+      out_of_sync: ${t4dataset.segmentation3d.ignore_index}
+      unpainted: ${t4dataset.segmentation3d.ignore_index}
+    num_classes: 15
+    class_names: ${seg_class_names:${t4dataset.segmentation3d.class_mapping}, ${t4dataset.segmentation3d.num_classes}}
+    metrics:
+    - _target_: autoware_ml.metrics.segmentation3d.suite.Segmentation3DMetricSuite
+      components:
+      - _target_: autoware_ml.metrics.segmentation3d.iou.IoU
+        stages:
+        - val
+        - test
+      - _target_: autoware_ml.metrics.segmentation3d.accuracy.Accuracy
+        stages:
+        - val
+        - test
+      - _target_: autoware_ml.metrics.segmentation3d.precision_recall_f1.PrecisionRecallF1
+        stages:
+        - val
+        - test
+      num_classes: ${t4dataset.segmentation3d.num_classes}
+      ignore_index: ${t4dataset.segmentation3d.ignore_index}
+      class_names: ${t4dataset.segmentation3d.class_names}
+      ranges:
+      - _target_: autoware_ml.metrics.base.MetricRange
+        name: 0-50m
+        min_distance: 0.0
+        max_distance: 50.0
+      - _target_: autoware_ml.metrics.base.MetricRange
+        name: 50-90m
+        min_distance: 50.0
+        max_distance: 90.0
+      - _target_: autoware_ml.metrics.base.MetricRange
+        name: 90-121m
+        min_distance: 90.0
+        max_distance: 121.0
+      - _target_: autoware_ml.metrics.base.MetricRange
+        name: 0-121m
+        min_distance: 0.0
+        max_distance: 121.0
+  lidar: {}
+batch_size: 1
+num_workers: 4

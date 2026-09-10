@@ -1,0 +1,6 @@
+- batch_size=1
+- num_workers=4
+- trainer.devices=1
+- trainer.precision=16-mixed
+- +trainer.max_time=00:00:05:00
+- logger.tracking_uri=sqlite:////workspace/autoware_training_mlflow2.db
