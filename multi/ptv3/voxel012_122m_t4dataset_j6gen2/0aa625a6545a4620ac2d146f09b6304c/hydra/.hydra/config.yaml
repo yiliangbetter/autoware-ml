@@ -1,0 +1,807 @@
+callbacks:
+  model_checkpoint:
+    _target_: lightning.pytorch.callbacks.ModelCheckpoint
+    monitor: val/loss
+    dirpath: ${hydra:run.dir}/checkpoints
+    filename: best
+    save_top_k: 1
+    mode: min
+    verbose: true
+  model_checkpoint_last:
+    _target_: lightning.pytorch.callbacks.ModelCheckpoint
+    dirpath: ${hydra:run.dir}/checkpoints
+    filename: last
+    save_top_k: 1
+    enable_version_counter: false
+    every_n_train_steps: 100
+  early_stopping:
+    _target_: autoware_ml.callbacks.early_stopping.EarlyStopping
+    monitor: val/loss
+    patience: 30
+    mode: min
+  lr_monitor:
+    _target_: lightning.pytorch.callbacks.LearningRateMonitor
+    logging_interval: step
+data_preprocessing:
+  _target_: autoware_ml.preprocessing.base.DataPreprocessing
+  pipeline: []
+datamodule:
+  train_dataloader_cfg:
+    pin_memory: true
+    persistent_workers: true
+    drop_last: false
+    shuffle: true
+    batch_size: ${batch_size}
+    num_workers: ${num_workers}
+  val_dataloader_cfg:
+    pin_memory: true
+    persistent_workers: true
+    drop_last: false
+    shuffle: false
+    batch_size: ${batch_size}
+    num_workers: ${num_workers}
+  test_dataloader_cfg:
+    pin_memory: true
+    persistent_workers: true
+    drop_last: false
+    shuffle: false
+    batch_size: ${batch_size}
+    num_workers: ${num_workers}
+  predict_dataloader_cfg:
+    pin_memory: true
+    persistent_workers: true
+    drop_last: false
+    shuffle: false
+  train_transforms:
+    _target_: autoware_ml.transforms.base.TransformsCompose
+    pipeline:
+    - _target_: autoware_ml.transforms.boxes3d.merge.MergeObjects3D
+      merge_objects: ${dataset.detection3d.merge_objects}
+      name_mapping: ${dataset.detection3d.name_mapping}
+    - _target_: autoware_ml.transforms.boxes3d.loading.LoadAnnotations3D
+      name_mapping: ${dataset.detection3d.name_mapping}
+      filter_attributes: ${dataset.detection3d.filter_attributes}
+      use_valid_flag: false
+    - _target_: autoware_ml.transforms.segmentation3d.loading.LoadSegAnnotations3D
+      class_mapping: ${segmentation_class_mapping}
+      ignore_index: ${dataset.segmentation3d.ignore_index}
+    - _target_: autoware_ml.transforms.point_cloud.sweeps.LoadPointsFromMultiSweeps
+      sweeps_num: 1
+      load_dim: 5
+      use_dim:
+      - 0
+      - 1
+      - 2
+      - 3
+      remove_close: true
+    - _target_: autoware_ml.transforms.point_cloud.formatting.PreparePointCloudInput
+    - _target_: autoware_ml.transforms.segmentation3d.formatting.PreparePointSegInput
+    - _target_: autoware_ml.transforms.point_cloud.geometry.GlobalRotScaleTrans
+      rot_range:
+      - -0.78539816
+      - 0.78539816
+      scale_ratio_range:
+      - 0.95
+      - 1.05
+      translation_std:
+      - 0.5
+      - 0.5
+      - 0.2
+    - _target_: autoware_ml.transforms.point_cloud.geometry.RandomFlip3D
+      flip_ratio_bev_horizontal: 0.5
+      flip_ratio_bev_vertical: 0.5
+    - _target_: autoware_ml.transforms.point_cloud.crop.PointsRangeFilter
+      point_cloud_range: ${point_cloud_range}
+    - _target_: autoware_ml.transforms.boxes3d.filters.ObjectRangeFilter
+      point_cloud_range: ${point_cloud_range}
+    - _target_: autoware_ml.transforms.boxes3d.filters.ObjectRangeMinPointsFilter
+      range_radius:
+      - 0.0
+      - 60.0
+      min_num_points: ${dataset.detection3d.train_min_points_near}
+    - _target_: autoware_ml.transforms.boxes3d.filters.ObjectRangeMinPointsFilter
+      range_radius:
+      - 60.0
+      - 130.0
+      min_num_points: ${dataset.detection3d.train_min_points_far}
+    - _target_: autoware_ml.transforms.common.copying.Copy
+      keys_dict:
+        segment: origin_segment
+        coord: origin_coord
+    - _target_: autoware_ml.transforms.point_cloud.sampling.GridSample
+      grid_size: ${grid_size}
+      point_cloud_range: ${point_cloud_range}
+      hash_type: fnv
+      mode: train
+      keys:
+      - coord
+      - strength
+      - segment
+      return_inverse: true
+      return_grid_coord: true
+    - _target_: autoware_ml.transforms.common.packing.BuildPointFeatures
+      keys:
+      - coord
+      - strength
+      output_key: feat
+  val_transforms:
+    _target_: autoware_ml.transforms.base.TransformsCompose
+    pipeline:
+    - _target_: autoware_ml.transforms.boxes3d.merge.MergeObjects3D
+      merge_objects: ${dataset.detection3d.merge_objects}
+      name_mapping: ${dataset.detection3d.name_mapping}
+    - _target_: autoware_ml.transforms.boxes3d.loading.LoadAnnotations3D
+      name_mapping: ${dataset.detection3d.name_mapping}
+      filter_attributes: ${dataset.detection3d.filter_attributes}
+      use_valid_flag: false
+    - _target_: autoware_ml.transforms.segmentation3d.loading.LoadSegAnnotations3D
+      class_mapping: ${segmentation_class_mapping}
+      ignore_index: ${dataset.segmentation3d.ignore_index}
+    - _target_: autoware_ml.transforms.point_cloud.sweeps.LoadPointsFromMultiSweeps
+      sweeps_num: 1
+      load_dim: 5
+      use_dim:
+      - 0
+      - 1
+      - 2
+      - 3
+      remove_close: true
+    - _target_: autoware_ml.transforms.point_cloud.formatting.PreparePointCloudInput
+    - _target_: autoware_ml.transforms.segmentation3d.formatting.PreparePointSegInput
+    - _target_: autoware_ml.transforms.point_cloud.crop.PointsRangeFilter
+      point_cloud_range: ${point_cloud_range}
+    - _target_: autoware_ml.transforms.boxes3d.filters.ObjectRangeFilter
+      point_cloud_range: ${point_cloud_range}
+    - _target_: autoware_ml.transforms.boxes3d.filters.ObjectRangeMinPointsFilter
+      range_radius:
+      - 0.0
+      - 60.0
+      min_num_points: ${dataset.detection3d.train_min_points_near}
+    - _target_: autoware_ml.transforms.boxes3d.filters.ObjectRangeMinPointsFilter
+      range_radius:
+      - 60.0
+      - 130.0
+      min_num_points: ${dataset.detection3d.train_min_points_far}
+    - _target_: autoware_ml.transforms.common.copying.Copy
+      keys_dict:
+        segment: origin_segment
+        coord: origin_coord
+    - _target_: autoware_ml.transforms.point_cloud.sampling.GridSample
+      grid_size: ${grid_size}
+      point_cloud_range: ${point_cloud_range}
+      hash_type: fnv
+      mode: test
+      keys:
+      - coord
+      - strength
+      - segment
+      return_inverse: true
+      return_grid_coord: true
+    - _target_: autoware_ml.transforms.common.packing.BuildPointFeatures
+      keys:
+      - coord
+      - strength
+      output_key: feat
+  test_transforms: ${datamodule.val_transforms}
+  predict_transforms:
+    _target_: autoware_ml.transforms.base.TransformsCompose
+    pipeline:
+    - _target_: autoware_ml.transforms.point_cloud.sweeps.LoadPointsFromMultiSweeps
+      sweeps_num: 1
+      load_dim: 5
+      use_dim:
+      - 0
+      - 1
+      - 2
+      - 3
+      remove_close: true
+    - _target_: autoware_ml.transforms.point_cloud.formatting.PreparePointCloudInput
+    - _target_: autoware_ml.transforms.point_cloud.crop.PointsRangeFilter
+      point_cloud_range: ${point_cloud_range}
+    - _target_: autoware_ml.transforms.point_cloud.sampling.GridSample
+      grid_size: ${grid_size}
+      point_cloud_range: ${point_cloud_range}
+      hash_type: fnv
+      mode: test
+      keys:
+      - coord
+      - strength
+      return_inverse: true
+      return_grid_coord: true
+    - _target_: autoware_ml.transforms.common.packing.BuildPointFeatures
+      keys:
+      - coord
+      - strength
+      output_key: feat
+  collation_map:
+    coord: concat
+    feat: concat
+    grid_coord: concat
+    segment: concat
+    origin_segment: concat
+    origin_coord: concat
+    inverse: index_concat
+    gt_boxes: list
+    gt_labels: list
+  data_root: ${dataset.data_root}
+  class_names: ${dataset.detection3d.class_names}
+  name_mapping: ${dataset.detection3d.name_mapping}
+  _target_: autoware_ml.datamodule.t4dataset.segdet.T4SegmentationDetection3DDataModule
+  filter_attributes: ${dataset.detection3d.filter_attributes}
+  use_valid_flag: false
+  train_frame_sampling:
+    repeat_sampling_factor: 0.3
+    object_bev_range:
+    - -122.88
+    - -122.88
+    - 122.88
+    - 122.88
+    low_pedestrian_height_threshold: 1.5
+    low_pedestrian_bev_range:
+    - -50.0
+    - -50.0
+    - 50.0
+    - 50.0
+  train_ann_file: ${datamodule.data_root}/info/segdet3d/t4dataset_j6gen2_segdet3d_infos_train.pkl
+  val_ann_file: ${datamodule.data_root}/info/segdet3d/t4dataset_j6gen2_segdet3d_infos_val.pkl
+  test_ann_file: ${datamodule.data_root}/info/segdet3d/t4dataset_j6gen2_segdet3d_infos_test.pkl
+deploy:
+  onnx:
+    enabled: true
+    dynamo: false
+    opset_version: 17
+    modify_graph: null
+    do_constant_folding: false
+    modules:
+      encoder:
+        output_names:
+        - point_feat_0
+        - point_feat_1
+        - point_feat_2
+        - point_feat_3
+        - point_feat_4
+      seg3d_head:
+        output_names:
+        - pred_labels
+        - pred_probs
+      det3d_head:
+        output_names:
+        - dense_heatmap
+        - query_heatmap_score
+        - query_labels
+        - heatmap
+        - center
+        - height
+        - dim
+        - rot
+        - vel
+        modify_graph:
+          _target_: autoware_ml.utils.onnx_modifiers.TransHeadTensorRTModifier
+          k: ${num_proposals}
+          topk_node_name_substring: /bbox_head/TopK
+          attention_node_name_substring: /bbox_head/decoder
+  tensorrt:
+    enabled: false
+    workspace_size: 4294967296
+logger:
+  _target_: lightning.pytorch.loggers.MLFlowLogger
+  tracking_uri: sqlite:////workspace/autoware_training_multi.db
+model:
+  optimizer:
+    _partial_: true
+    _target_: torch.optim.AdamW
+    lr: 0.0001
+    weight_decay: 0.01
+  scheduler:
+    _partial_: true
+    _target_: autoware_ml.utils.schedulers.cyclic_cosine_annealing.CyclicCosineAnnealingLR
+    warmup_epochs: 12
+    decay_epochs: 88
+    max_lr_factor: 10.0
+    min_lr_factor: 0.0001
+  encoder:
+    _target_: autoware_ml.models.segmentation3d.encoders.ptv3.PointTransformerV3Encoder
+    in_channels: 4
+    order:
+    - z
+    - z-trans
+    - hilbert
+    - hilbert-trans
+    stride:
+    - 2
+    - 2
+    - 2
+    - 2
+    enc_depths:
+    - 2
+    - 2
+    - 2
+    - 2
+    - 2
+    enc_channels:
+    - 32
+    - 64
+    - 128
+    - 256
+    - 512
+    enc_num_head:
+    - 2
+    - 4
+    - 8
+    - 16
+    - 32
+    enc_patch_size:
+    - 512
+    - 512
+    - 512
+    - 512
+    - 512
+    mlp_ratio: 4
+    qkv_bias: true
+    qk_scale: null
+    attn_drop: 0.0
+    proj_drop: 0.0
+    drop_path: 0.3
+    pre_norm: true
+    shuffle_orders: true
+    enable_rpe: false
+    enable_flash: true
+    upcast_attention: false
+    upcast_softmax: false
+  seg3d_head:
+    _target_: autoware_ml.models.segmentation3d.heads.ptv3.PTv3SegDecoderHead
+    num_classes: ${dataset.segmentation3d.num_classes}
+    ignore_index: ${dataset.segmentation3d.ignore_index}
+    order: ${model.encoder.order}
+    enc_channels: ${model.encoder.enc_channels}
+    dec_depths:
+    - 0
+    - 0
+    - 1
+    - 1
+    dec_channels:
+    - 64
+    - 64
+    - 128
+    - 256
+    dec_num_head:
+    - 4
+    - 4
+    - 8
+    - 16
+    dec_patch_size:
+    - 512
+    - 512
+    - 512
+    - 512
+    mlp_ratio: ${model.encoder.mlp_ratio}
+    qkv_bias: ${model.encoder.qkv_bias}
+    qk_scale: ${model.encoder.qk_scale}
+    attn_drop: ${model.encoder.attn_drop}
+    proj_drop: ${model.encoder.proj_drop}
+    drop_path: ${model.encoder.drop_path}
+    pre_norm: ${model.encoder.pre_norm}
+    enable_rpe: ${model.encoder.enable_rpe}
+    enable_flash: ${model.encoder.enable_flash}
+    upcast_attention: ${model.encoder.upcast_attention}
+    upcast_softmax: ${model.encoder.upcast_softmax}
+    lovasz_weight: 1.0
+  bev_neck:
+    _target_: autoware_ml.models.detection3d.ptv3.PTv3DetBEVNeck
+    fusion:
+      _target_: autoware_ml.models.detection3d.ptv3.PTv3DetFeatureFusion
+      in_channels: ${model.encoder.enc_channels[4]}
+      skip_channels: ${model.encoder.enc_channels[3]}
+      out_channels: 256
+    bev_projector:
+      _target_: autoware_ml.models.detection3d.ptv3.PTv3BEVProjection
+      in_channels: ${model.bev_neck.fusion.out_channels}
+      out_channels: 128
+      output_shape:
+      - 256
+      - 256
+    bev_encoder:
+      _target_: autoware_ml.models.detection3d.ptv3.PTv3BEVEncoder
+      in_channels: ${model.bev_neck.bev_projector.out_channels}
+      hidden_channels: 128
+      out_channels: 128
+      dilations:
+      - 1
+      - 2
+      - 5
+      - 2
+  _target_: autoware_ml.models.multi.ptv3_segdet.PTv3SegDetModel
+  bbox_head:
+    _target_: autoware_ml.models.detection3d.heads.transfusion.TransFusionHead
+    num_proposals: ${num_proposals}
+    auxiliary: true
+    in_channels: 128
+    hidden_channel: 128
+    num_classes: ${num_classes}
+    class_names: ${dataset.detection3d.class_names}
+    dense_heatmap_pooling_classes:
+    - car
+    - truck
+    - bus
+    num_decoder_layers: 1
+    num_heads: 8
+    feedforward_channels: 256
+    common_heads:
+      center:
+      - 2
+      - 2
+      height:
+      - 1
+      - 2
+      dim:
+      - 3
+      - 2
+      rot:
+      - 2
+      - 2
+      vel:
+      - 2
+      - 2
+    bbox_coder:
+      _target_: autoware_ml.models.detection3d.task_modules.bbox_coders.TransFusionBBoxCoder
+      pc_range: ${point_cloud_range}
+      voxel_size: ${head_voxel_size}
+      out_size_factor: 1
+      post_center_range:
+      - -132.88
+      - -132.88
+      - -5.0
+      - 132.88
+      - 132.88
+      - 12.0
+      score_threshold:
+      - 0.015
+      - 0.01
+      - 0.01
+      - 0.02
+      - 0.03
+      - 0.04
+      - 0.02
+      code_size: 10
+    assigner:
+      _target_: autoware_ml.models.detection3d.task_modules.assigners.HungarianAssigner3D
+      cls_cost:
+        _target_: autoware_ml.models.detection3d.task_modules.match_costs.ClassificationCost
+        weight: 0.15
+        alpha: 0.25
+        gamma: 2.0
+      reg_cost:
+        _target_: autoware_ml.models.detection3d.task_modules.match_costs.BBoxBEVL1Cost
+        weight: 0.25
+      iou_cost:
+        _target_: autoware_ml.models.detection3d.task_modules.match_costs.IoU3DCost
+        weight: 0.25
+    point_cloud_range: ${point_cloud_range}
+    voxel_size: ${head_voxel_size}
+    out_size_factor: 1
+    code_weights:
+    - 1.0
+    - 1.0
+    - 1.0
+    - 1.0
+    - 1.0
+    - 1.0
+    - 1.0
+    - 1.0
+    - 0.2
+    - 0.2
+    min_radius: 2
+    gaussian_overlap: 0.1
+    score_threshold: 0.1
+    post_max_size: 100
+    nms_min_radius: 1.0
+    loss_cls_weight: 1.0
+    loss_bbox_weight: 0.25
+    loss_heatmap_weight: 1.0
+    heatmap_target: oriented
+    heatmap_init_bias: -2.19
+    nms_kernel_size: 3
+    use_velocity: true
+    nms_type: circle
+    nms_groups:
+    - class_names:
+      - car
+      - truck
+      - bus
+      nms_radius: 0.25
+      post_max_size: 300
+    - class_names:
+      - bicycle
+      nms_radius: 0.0
+      post_max_size: 50
+    - class_names:
+      - pedestrian
+      nms_radius: 0.0
+      post_max_size: 100
+    - class_names:
+      - traffic_cone
+      nms_radius: 0.0
+      post_max_size: 100
+    - class_names:
+      - barrier
+      nms_radius: 0.0
+      post_max_size: 50
+  segmentation_loss_weight: 1.0
+  detection_loss_weight: 1.0
+  metrics: ${merge_lists:${dataset.detection3d.metrics},${dataset.segmentation3d.metrics}}
+  export_output_names:
+  - pred_labels
+  - pred_probs
+  - dense_heatmap
+  - query_heatmap_score
+  - query_labels
+  - heatmap
+  - center
+  - height
+  - dim
+  - rot
+  - vel
+  grid_size: ${grid_size}
+  point_cloud_range: ${point_cloud_range}
+  optimizer_group_overrides:
+    encoder_block:
+      lr: 2.0e-05
+    encoder_default:
+      lr: 5.0e-05
+    seg3d_head:
+      lr: 5.0e-05
+seed: 3407
+trainer:
+  _target_: lightning.Trainer
+  max_epochs: 100
+  accelerator: gpu
+  strategy: auto
+  devices: 1
+  precision: 16-mixed
+  deterministic: warn
+  log_every_n_steps: 50
+  val_check_interval: 1.0
+  check_val_every_n_epoch: 1
+  accumulate_grad_batches: 1
+  enable_progress_bar: true
+  enable_model_summary: true
+  gradient_clip_val: 5.0
+  gradient_clip_algorithm: norm
+  max_time: 00:00:05:00
+  num_sanity_val_steps: 0
+dataset: ${t4dataset}
+num_classes: ${dataset.detection3d.num_classes}
+point_cloud_range:
+- -122.88
+- -122.88
+- -3.0
+- 122.88
+- 122.88
+- 5.0
+grid_size: 0.12
+head_voxel_size:
+- 0.96
+- 0.96
+- 8.0
+num_proposals: 500
+t4dataset:
+  data_root: ${oc.env:AUTOWARE_ML_DATA_PATH}/t4dataset
+  detection3d:
+    class_names:
+    - car
+    - truck
+    - bus
+    - bicycle
+    - pedestrian
+    - traffic_cone
+    - barrier
+    num_classes: 7
+    name_mapping:
+      car: car
+      vehicle.car: car
+      vehicle.emergency (ambulance & police): car
+      ambulance: car
+      vehicle.ambulance: car
+      police_car: car
+      vehicle.police: car
+      forklift: car
+      kart: car
+      other_vehicle: car
+      truck: truck
+      vehicle.truck: truck
+      fire_truck: truck
+      vehicle.fire: truck
+      trailer: trailer
+      vehicle.trailer: trailer
+      semi_trailer: trailer
+      tractor_unit: truck
+      construction_vehicle: truck
+      vehicle.construction: truck
+      bus: bus
+      vehicle.bus: bus
+      vehicle.bus (bendy & rigid): bus
+      motorcycle: bicycle
+      vehicle.motorcycle: bicycle
+      bicycle: bicycle
+      vehicle.bicycle: bicycle
+      pedestrian: pedestrian
+      pedestrian.adult: pedestrian
+      pedestrian.child: pedestrian
+      other_pedestrian: pedestrian
+      police_officer: pedestrian
+      pedestrian.police_officer: pedestrian
+      construction_worker: pedestrian
+      pedestrian.construction_worker: pedestrian
+      personal_mobility: pedestrian
+      pedestrian.personal_mobility: pedestrian
+      wheelchair: pedestrian
+      pedestrian.wheelchair: pedestrian
+      stroller: pedestrian
+      pedestrian.stroller: pedestrian
+      barrier: barrier
+      movable_object.barrier: barrier
+      movable_object.debris: barrier
+      movable_object.pushable_pullable: barrier
+      traffic_cone: traffic_cone
+      trafficcone: traffic_cone
+      movable_object.traffic_cone: traffic_cone
+      movable_object.trafficcone: traffic_cone
+      pushable_pullable: barrier
+      construction_sign: barrier
+    filter_attributes:
+    - - vehicle.bicycle
+      - vehicle_state.parked
+    - - vehicle.bicycle
+      - cycle_state.without_rider
+    - - vehicle.bicycle
+      - motorcycle_state.without_rider
+    - - vehicle.motorcycle
+      - vehicle_state.parked
+    - - vehicle.motorcycle
+      - cycle_state.without_rider
+    - - vehicle.motorcycle
+      - motorcycle_state.without_rider
+    - - bicycle
+      - vehicle_state.parked
+    - - bicycle
+      - cycle_state.without_rider
+    - - bicycle
+      - motorcycle_state.without_rider
+    - - motorcycle
+      - vehicle_state.parked
+    - - motorcycle
+      - cycle_state.without_rider
+    - - motorcycle
+      - motorcycle_state.without_rider
+    merge_objects:
+    - - truck
+      - - truck
+        - trailer
+    use_valid_flag: true
+    train_min_points_near: 3
+    train_min_points_far: 2
+    eval_class_range:
+      car: 121.0
+      truck: 121.0
+      bus: 121.0
+      bicycle: 121.0
+      pedestrian: 121.0
+      traffic_cone: 121.0
+      barrier: 121.0
+    metric_ranges:
+    - _target_: autoware_ml.metrics.base.MetricRange
+      name: 0-50m
+      min_distance: 0.0
+      max_distance: 50.0
+    - _target_: autoware_ml.metrics.base.MetricRange
+      name: 50-90m
+      min_distance: 50.0
+      max_distance: 90.0
+    - _target_: autoware_ml.metrics.base.MetricRange
+      name: 90-121m
+      min_distance: 90.0
+      max_distance: 121.0
+    - _target_: autoware_ml.metrics.base.MetricRange
+      name: 0-121m
+      min_distance: 0.0
+      max_distance: 121.0
+    metrics:
+    - _target_: autoware_ml.metrics.detection3d.suite.Detection3DMetricSuite
+      components:
+      - _target_: autoware_ml.metrics.detection3d.mean_ap.MeanAP
+        stages:
+        - val
+        - test
+      - _target_: autoware_ml.metrics.detection3d.heading_ap.HeadingAP
+        stages:
+        - test
+      - _target_: autoware_ml.metrics.detection3d.nds.Nds
+        stages:
+        - test
+      - _target_: autoware_ml.metrics.detection3d.tp_errors.TpErrors
+        stages:
+        - test
+      class_names: ${t4dataset.detection3d.class_names}
+      thresholds:
+      - 0.5
+      - 1.0
+      - 2.0
+      - 4.0
+      min_num_points: 2
+      eval_class_range: ${t4dataset.detection3d.eval_class_range}
+      ranges: ${t4dataset.detection3d.metric_ranges}
+  segmentation3d:
+    ignore_index: -1
+    class_mapping:
+      car: 0
+      emergency_vehicle: 0
+      forklift: 0
+      kart: 0
+      truck: 1
+      tractor_unit: 1
+      semi_trailer: 1
+      construction_vehicle: 1
+      bus: 2
+      motorcycle: 3
+      bicycle: 3
+      pedestrian: 4
+      personal_mobility: 4
+      stroller: 4
+      traffic_cone: 5
+      barrier: 6
+      debris: 7
+      pushable_pullable: 7
+      drivable_surface: 8
+      other_flat_surface: 9
+      sidewalk: 9
+      vegetation: 10
+      manmade: 11
+      vertical_thin: 12
+      other_stuff: 13
+      noise: 14
+      animal: ${t4dataset.segmentation3d.ignore_index}
+      train: ${t4dataset.segmentation3d.ignore_index}
+      ghost_point: ${t4dataset.segmentation3d.ignore_index}
+      out_of_sync: ${t4dataset.segmentation3d.ignore_index}
+      unpainted: ${t4dataset.segmentation3d.ignore_index}
+    num_classes: 15
+    class_names: ${seg_class_names:${t4dataset.segmentation3d.class_mapping}, ${t4dataset.segmentation3d.num_classes}}
+    metrics:
+    - _target_: autoware_ml.metrics.segmentation3d.suite.Segmentation3DMetricSuite
+      components:
+      - _target_: autoware_ml.metrics.segmentation3d.iou.IoU
+        stages:
+        - val
+        - test
+      - _target_: autoware_ml.metrics.segmentation3d.accuracy.Accuracy
+        stages:
+        - val
+        - test
+      - _target_: autoware_ml.metrics.segmentation3d.precision_recall_f1.PrecisionRecallF1
+        stages:
+        - val
+        - test
+      num_classes: ${t4dataset.segmentation3d.num_classes}
+      ignore_index: ${t4dataset.segmentation3d.ignore_index}
+      class_names: ${t4dataset.segmentation3d.class_names}
+      ranges:
+      - _target_: autoware_ml.metrics.base.MetricRange
+        name: 0-50m
+        min_distance: 0.0
+        max_distance: 50.0
+      - _target_: autoware_ml.metrics.base.MetricRange
+        name: 50-90m
+        min_distance: 50.0
+        max_distance: 90.0
+      - _target_: autoware_ml.metrics.base.MetricRange
+        name: 90-121m
+        min_distance: 90.0
+        max_distance: 121.0
+      - _target_: autoware_ml.metrics.base.MetricRange
+        name: 0-121m
+        min_distance: 0.0
+        max_distance: 121.0
+  lidar: {}
+segmentation_class_mapping: ${dataset.segmentation3d.class_mapping}
+batch_size: 1
+num_workers: 4

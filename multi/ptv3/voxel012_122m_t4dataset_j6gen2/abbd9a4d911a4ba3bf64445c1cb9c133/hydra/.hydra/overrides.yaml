@@ -1,0 +1,12 @@
+- batch_size=1
+- num_workers=4
+- trainer.devices=1
+- trainer.precision=16-mixed
+- +trainer.max_time=00:00:05:00
+- +trainer.num_sanity_val_steps=0
+- +callbacks.model_checkpoint_last.every_n_train_steps=100
+- +t4dataset.detection3d.name_mapping.pushable_pullable=barrier
+- +t4dataset.detection3d.name_mapping.construction_sign=barrier
+- +t4dataset.detection3d.name_mapping.debris=barrier
+- logger.tracking_uri=sqlite:////workspace/autoware_training_multi.db
+- +resume_checkpoint=/workspace/multi/ptv3/voxel012_122m_t4dataset_j6gen2/abbd9a4d911a4ba3bf64445c1cb9c133/artifacts/checkpoints/last.ckpt
