@@ -151,6 +151,56 @@ class ClearEvent:
     recursive: bool = True
 
 
+@dataclass(frozen=True)
+class ViewOverride:
+    """Describe backend-neutral per-entity behavior inside one view."""
+
+    path: str
+    visible: bool | None = None
+    show_labels: bool | None = None
+    series_name: str | None = None
+    marker_size: float | None = None
+
+
+@dataclass(frozen=True)
+class ViewSpec:
+    """Describe one backend-neutral spatial, plot, or text view."""
+
+    kind: Literal["spatial3d", "spatial2d", "time_series", "text_log"]
+    name: str
+    origin: str
+    contents: tuple[str, ...]
+    overrides: tuple[ViewOverride, ...] = ()
+    y_range: tuple[float, float] | None = None
+    visible_time_range: tuple[int, int] | None = None
+    timeline: str | None = None
+
+
+@dataclass(frozen=True)
+class LayoutGroup:
+    """Compose views into a backend-neutral row, column, or tab group."""
+
+    kind: Literal["horizontal", "vertical", "tabs"]
+    children: tuple[ViewSpec | LayoutGroup, ...]
+    name: str | None = None
+    shares: tuple[float, ...] | None = None
+    active: int | None = None
+
+
+@dataclass(frozen=True)
+class BlueprintEvent:
+    """Request a viewer layout without exposing a concrete backend SDK."""
+
+    layout: ViewSpec | LayoutGroup
+    blueprint_panel_expanded: bool | None = None
+    selection_panel_expanded: bool | None = None
+    time_panel_expanded: bool | None = None
+    auto_layout: bool | None = None
+    auto_views: bool = False
+    make_active: bool | None = None
+    make_default: bool | None = None
+
+
 VisualizationEvent: TypeAlias = (
     AnnotationContextEvent
     | ImageEvent
@@ -163,4 +213,5 @@ VisualizationEvent: TypeAlias = (
     | ScalarEvent
     | TextEvent
     | ClearEvent
+    | BlueprintEvent
 )

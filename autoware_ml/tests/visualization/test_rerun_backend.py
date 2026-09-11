@@ -26,16 +26,19 @@ from autoware_ml.visualization.contracts import VisualizationSessionConfig
 from autoware_ml.visualization.events import (
     AnnotationContextEvent,
     AnnotationInfo,
+    BlueprintEvent,
     Boxes3DEvent,
     ClearEvent,
     ImageEvent,
     LineStrips2DEvent,
+    LayoutGroup,
     PinholeEvent,
     PointCloud3DEvent,
     Points2DEvent,
     ScalarEvent,
     TextEvent,
     Transform3DEvent,
+    ViewSpec,
 )
 from autoware_ml.visualization.rerun_backend import (
     RerunVisualizationBackend,
@@ -141,6 +144,10 @@ def _build_fake_rerun(calls: dict[str, Any]) -> Any:
         @classmethod
         def TimeSeriesView(cls, *args: Any, **kwargs: Any) -> dict[str, Any]:
             return cls._part("TimeSeriesView", *args, **kwargs)
+
+        @classmethod
+        def TextLogView(cls, *args: Any, **kwargs: Any) -> dict[str, Any]:
+            return cls._part("TextLogView", *args, **kwargs)
 
         @classmethod
         def Horizontal(cls, *args: Any, **kwargs: Any) -> dict[str, Any]:
@@ -594,6 +601,51 @@ def test_backend_can_show_camera_geometry_initially(
         "'/scene/cameras': {'kind': 'EntityBehavior', 'args': (), 'visible': True}"
         in serialized
     )
+
+
+def test_backend_accepts_adapter_defined_blueprint_without_path_knowledge(
+    backend: RerunVisualizationBackend,
+    rerun_calls: dict[str, Any],
+) -> None:
+    """A new adapter can own its layout without changing the Rerun backend."""
+    backend.log_events(
+        [
+            PointCloud3DEvent(
+                path="scene/custom_task/output",
+                positions=np.zeros((2, 3), dtype=np.float32),
+            ),
+            BlueprintEvent(
+                layout=LayoutGroup(
+                    kind="tabs",
+                    name="Custom task",
+                    children=(
+                        ViewSpec(
+                            kind="spatial3d",
+                            name="Adapter output",
+                            origin="scene/custom_task",
+                            contents=("scene/custom_task/output",),
+                        ),
+                    ),
+                ),
+                make_active=True,
+            ),
+        ]
+    )
+
+    assert len(rerun_calls["blueprints"]) == 1
+    assert "Custom task" in repr(rerun_calls["blueprints"][0][0])
+    assert "scene/custom_task/output" in repr(rerun_calls["blueprints"][0][0])
+
+    backend.log_events(
+        [
+            PointCloud3DEvent(
+                path="scene/custom_task/second_output",
+                positions=np.zeros((2, 3), dtype=np.float32),
+            )
+        ]
+    )
+
+    assert len(rerun_calls["blueprints"]) == 1
 
 
 def test_backend_converts_yaw_to_a_z_axis_quaternion(

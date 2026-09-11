@@ -16,7 +16,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from typing import Any
 
 from autoware_ml.utils.calibration import CalibrationData
@@ -35,7 +35,7 @@ from autoware_ml.visualization.detection3d import (
     build_detection3d_data_events,
     build_detection3d_events,
 )
-from autoware_ml.visualization.events import ClearEvent
+from autoware_ml.visualization.events import ClearEvent, VisualizationEvent
 from autoware_ml.visualization.segmentation3d import (
     build_segmentation3d_data_events,
     build_segmentation3d_events,
@@ -57,6 +57,10 @@ class VisualizationSession:
     def set_step(self, step: int) -> None:
         """Advance the visualization timeline."""
         self.backend.set_step(step)
+
+    def log_events(self, events: Iterable[VisualizationEvent]) -> None:
+        """Log events from an external task adapter through the neutral API."""
+        self.backend.log_events(events)
 
     def begin_frame(self, step: int, *, timestamp: float | None = None) -> None:
         """Start a replacement-style scene frame and remove stale geometry.
