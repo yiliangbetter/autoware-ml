@@ -24,7 +24,6 @@ treat box-less frames as detection-unsupervised).
 from __future__ import annotations
 
 from copy import deepcopy
-import logging
 import pickle
 from collections.abc import Mapping, Sequence
 from pathlib import Path
@@ -52,8 +51,6 @@ from autoware_ml.datamodule.t4dataset.detection3d import (
 )
 from autoware_ml.transforms.base import TransformsCompose
 from autoware_ml.transforms.boxes3d.annotations import normalize_filter_attributes
-
-logger = logging.getLogger(__name__)
 
 
 def _interpolate_numbered_path(
@@ -193,15 +190,25 @@ class T4SegmentationDetection3DDataset(Dataset):
             ),
         }
         images = sample.get("images")
-        if isinstance(images, Mapping):
-            info["images"] = {
-                camera_name: {
+        if images is not None:
+            if not isinstance(images, Mapping):
+                raise TypeError(f"Record {sample['token']!r} images must be a mapping")
+            resolved_images = {}
+            for camera_name, camera_info in images.items():
+                if not isinstance(camera_info, Mapping):
+                    raise TypeError(
+                        f"Record {sample['token']!r} camera {camera_name!r} must be a mapping"
+                    )
+                image_path = camera_info.get("img_path")
+                if not image_path:
+                    raise ValueError(
+                        f"Record {sample['token']!r} camera {camera_name!r} is missing img_path"
+                    )
+                resolved_images[camera_name] = {
                     **camera_info,
-                    "img_path": resolve_data_path(self.data_root, camera_info["img_path"]),
+                    "img_path": resolve_data_path(self.data_root, image_path),
                 }
-                for camera_name, camera_info in images.items()
-                if camera_info.get("img_path") is not None
-            }
+            info["images"] = resolved_images
         return info
 
     def get_intermediate_prediction_infos(
@@ -224,17 +231,46 @@ class T4SegmentationDetection3DDataset(Dataset):
 
         current = self.get_data_info(index)
         following = self.get_data_info(index + 1)
-        if current.get("scene_token") is None or current.get("scene_token") != following.get(
-            "scene_token"
-        ):
+        current_scene = current.get("scene_token")
+        following_scene = following.get("scene_token")
+        if current_scene is None or following_scene is None:
+            raise ValueError(
+                "Intermediate prediction reconstruction requires scene_token on both keyframes"
+            )
+        if current_scene != following_scene:
             return []
 
+        if current.get("timestamp") is None or following.get("timestamp") is None:
+            raise ValueError(
+                "Intermediate prediction reconstruction requires timestamps on both keyframes"
+            )
         current_timestamp = float(current["timestamp"])
         next_timestamp = float(following["timestamp"])
         duration = next_timestamp - current_timestamp
+        if duration <= 0:
+            raise ValueError(
+                "Following keyframe timestamp must be later than the current timestamp"
+            )
         interval_count = int(round(duration * prediction_frequency_hz))
-        if duration <= 0 or interval_count <= 1:
+        if interval_count <= 1:
             return []
+
+        current_images = current.get("images")
+        next_images = following.get("images")
+        if current_images is None and next_images is None:
+            current_images = {}
+            next_images = {}
+        elif not isinstance(current_images, Mapping) or not isinstance(
+            next_images, Mapping
+        ):
+            raise ValueError(
+                "Camera metadata must be present on both keyframes when reconstructing images"
+            )
+        if set(current_images) != set(next_images):
+            raise ValueError(
+                "Camera sets differ between adjacent keyframes: "
+                f"{sorted(current_images)} != {sorted(next_images)}"
+            )
 
         intermediate_infos: list[dict[str, Any]] = []
         used_lidar_paths: set[Path] = set()
@@ -243,10 +279,19 @@ class T4SegmentationDetection3DDataset(Dataset):
             lidar_path = _interpolate_numbered_path(
                 current["lidar_path"], following["lidar_path"], fraction
             )
-            if lidar_path is None or lidar_path in used_lidar_paths or not lidar_path.is_file():
-                if lidar_path is not None and lidar_path not in used_lidar_paths:
-                    logger.warning("Skipping missing intermediate LiDAR frame: %s", lidar_path)
-                continue
+            if lidar_path is None:
+                raise ValueError(
+                    "Could not interpolate an intermediate LiDAR path between "
+                    f"{current['lidar_path']!r} and {following['lidar_path']!r}"
+                )
+            if lidar_path in used_lidar_paths:
+                raise ValueError(
+                    f"Intermediate frequency maps multiple timestamps to {str(lidar_path)!r}"
+                )
+            if not lidar_path.is_file():
+                raise FileNotFoundError(
+                    f"Missing intermediate LiDAR frame at offset {offset}: {lidar_path}"
+                )
             used_lidar_paths.add(lidar_path)
 
             info = deepcopy(current)
@@ -264,17 +309,25 @@ class T4SegmentationDetection3DDataset(Dataset):
             info.pop("pts_semantic_mask_path", None)
 
             interpolated_images: dict[str, Any] = {}
-            current_images = current.get("images", {})
-            next_images = following.get("images", {})
             for camera_name, current_camera in current_images.items():
                 next_camera = next_images.get(camera_name)
                 if not isinstance(next_camera, Mapping):
-                    continue
+                    raise TypeError(
+                        f"Following camera metadata for {camera_name!r} must be a mapping"
+                    )
                 image_path = _interpolate_numbered_path(
                     current_camera["img_path"], next_camera["img_path"], fraction
                 )
-                if image_path is None or not image_path.is_file():
-                    continue
+                if image_path is None:
+                    raise ValueError(
+                        f"Could not interpolate camera {camera_name!r} between "
+                        f"{current_camera['img_path']!r} and {next_camera['img_path']!r}"
+                    )
+                if not image_path.is_file():
+                    raise FileNotFoundError(
+                        f"Missing intermediate image for {camera_name!r} at offset "
+                        f"{offset}: {image_path}"
+                    )
                 camera_info = deepcopy(current_camera)
                 camera_info["img_path"] = str(image_path)
                 if (
@@ -283,7 +336,10 @@ class T4SegmentationDetection3DDataset(Dataset):
                 ):
                     camera_info["timestamp"] = (
                         float(current_camera["timestamp"])
-                        + (float(next_camera["timestamp"]) - float(current_camera["timestamp"]))
+                        + (
+                            float(next_camera["timestamp"])
+                            - float(current_camera["timestamp"])
+                        )
                         * fraction
                     )
                 interpolated_images[camera_name] = camera_info

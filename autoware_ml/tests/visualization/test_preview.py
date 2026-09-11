@@ -135,6 +135,30 @@ class _DecodedMultiPreviewModel(PreviewModelBase):
         }
 
 
+class _SegmentationWithoutLogitsModel(PreviewModelBase):
+    """Return an incomplete segmentation contract for fail-loud tests."""
+
+    def predict_step(
+        self, batch_inputs_dict: dict[str, Any], batch_idx: int
+    ) -> dict[str, torch.Tensor]:
+        del batch_inputs_dict, batch_idx
+        return {
+            "pred_labels": torch.tensor([0, 1]),
+            "pred_probs": torch.tensor([[0.9, 0.1], [0.1, 0.9]]),
+        }
+
+
+class _MultiWithoutLogitsModel(_DecodedMultiPreviewModel):
+    """Return decoded multi-task output without the required entropy source."""
+
+    def predict_step(
+        self, batch_inputs_dict: dict[str, Any], batch_idx: int
+    ) -> dict[str, Any]:
+        predictions = super().predict_step(batch_inputs_dict, batch_idx)
+        del predictions["seg_pred_logits"]
+        return predictions
+
+
 class _IntermediatePreviewDataset(PreviewDataset):
     """Expose one prediction-only record after its GT keyframe."""
 
@@ -221,6 +245,17 @@ def test_preview_logs_a_segmentation_sample(preview_session: RecordingBackend) -
     point_paths = preview_session.paths_of(PointCloud3DEvent)
     assert "scene/prediction/segmentation" in point_paths
     assert "scene/ground_truth/segmentation" in point_paths
+
+
+def test_preview_requires_logits_for_pointwise_entropy(
+    preview_session: RecordingBackend,
+) -> None:
+    with pytest.raises(ValueError, match="pred_logits.*pointwise entropy"):
+        run_visualization_preview(
+            _SegmentationWithoutLogitsModel(),
+            PreviewDataModule([_segmentation_sample()], _SEGMENTATION_COLLATION),
+            _NOOP_PREVIEW,
+        )
 
 
 def test_preview_reconstructs_points_for_voxelized_segmentation(
@@ -361,6 +396,36 @@ def test_multitask_preview_omits_explicitly_unavailable_ground_truth(
     semantic_paths = preview_session.paths_of(PointCloud3DEvent)
     assert "scene/prediction/segmentation" in semantic_paths
     assert "scene/ground_truth/segmentation" not in semantic_paths
+
+
+def test_multitask_preview_requires_logits_for_pointwise_entropy(
+    preview_session: RecordingBackend,
+) -> None:
+    sample = {
+        "coord": np.array([[0.0, 0.0, 1.0], [1.0, 1.0, 1.0]], dtype=np.float32),
+        "inverse": np.array([0, 1], dtype=np.int64),
+        "origin_segment": np.array([0, 1], dtype=np.int64),
+        "gt_boxes": np.zeros((0, 7), dtype=np.float32),
+        "gt_labels": np.zeros((0,), dtype=np.int64),
+        "has_detection_ground_truth": True,
+        "has_segmentation_ground_truth": True,
+    }
+
+    with pytest.raises(ValueError, match="seg_pred_logits.*pointwise entropy"):
+        run_visualization_preview(
+            _MultiWithoutLogitsModel(),
+            PreviewDataModule(
+                [sample],
+                {
+                    "coord": "concat",
+                    "inverse": "index_concat",
+                    "origin_segment": "concat",
+                    "gt_boxes": "list",
+                    "gt_labels": "list",
+                },
+            ),
+            _NOOP_PREVIEW,
+        )
 
 
 def test_multitask_preview_runs_intermediate_frames_at_10hz_without_gt(
@@ -704,6 +769,37 @@ def test_preview_rejects_an_out_of_range_sample_index() -> None:
                 sample_index=5,
                 session=VisualizationSessionConfig(backend="noop"),
             ),
+        )
+
+
+def test_preview_rejects_incomplete_detection_ground_truth(
+    preview_session: RecordingBackend,
+) -> None:
+    sample = _detection_sample()
+    del sample["gt_labels"]
+
+    with pytest.raises(ValueError, match="gt_labels.*required"):
+        run_visualization_preview(
+            None,
+            PreviewDataModule([sample], {"points": "concat", "gt_boxes": "concat"}),
+            VisualizationPreviewConfig(
+                mode="data",
+                session=VisualizationSessionConfig(backend="noop"),
+            ),
+        )
+
+
+def test_preview_rejects_declared_but_empty_camera_metadata(
+    preview_session: RecordingBackend,
+) -> None:
+    sample = _segmentation_sample()
+    sample["images"] = {}
+
+    with pytest.raises(ValueError, match="at least one camera"):
+        run_visualization_preview(
+            SegmentationPreviewModel(),
+            PreviewDataModule([sample], _SEGMENTATION_COLLATION),
+            _NOOP_PREVIEW,
         )
 
 

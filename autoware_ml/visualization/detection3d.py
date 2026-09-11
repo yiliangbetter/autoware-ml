@@ -59,23 +59,33 @@ def build_detection3d_data_events(
     gt_boxes_np = as_numpy(gt_boxes, np.float32)
     gt_labels_np = as_numpy(gt_labels, np.int64).reshape(-1)
     if gt_boxes_np.ndim != 2 or gt_boxes_np.shape[1] < 7:
-        raise ValueError(f"ground-truth boxes must have shape (N, >=7), got {gt_boxes_np.shape}")
+        raise ValueError(
+            f"ground-truth boxes must have shape (N, >=7), got {gt_boxes_np.shape}"
+        )
     if gt_boxes_np.shape[0] != gt_labels_np.shape[0]:
         raise ValueError("ground-truth boxes and labels must have the same length")
 
     palette = build_label_palette(resolve_palette_size([gt_labels_np], class_names))
-    events: list[VisualizationEvent] = build_sample_metadata_events(root_path, sample_name)
+    events: list[VisualizationEvent] = build_sample_metadata_events(
+        root_path, sample_name
+    )
     ground_truth_path = f"{root_path}/ground_truth/detections"
-    annotation_context = build_class_annotation_context(ground_truth_path, palette, class_names)
+    annotation_context = build_class_annotation_context(
+        ground_truth_path, palette, class_names
+    )
     if annotation_context is not None:
         events.insert(0, annotation_context)
 
     if points is not None:
         events.extend(
-            build_lidar_reference_events(points, root_path=root_path, point_radius=point_radius)
+            build_lidar_reference_events(
+                points, root_path=root_path, point_radius=point_radius
+            )
         )
 
-    gt_label_text = [format_class_label(int(label), class_names) for label in gt_labels_np]
+    gt_label_text = [
+        format_class_label(int(label), class_names) for label in gt_labels_np
+    ]
     events.append(
         Boxes3DEvent(
             path=ground_truth_path,
@@ -135,27 +145,43 @@ def build_detection3d_events(
     point_color_mode: str = "semantic",
 ) -> list[VisualizationEvent]:
     """Build backend-neutral 3D detection visualization events for one sample."""
+    if (gt_boxes is None) != (gt_labels is None):
+        raise ValueError(
+            "ground-truth boxes and labels must either both be provided or both omitted"
+        )
     normalized_predictions = normalize_detection_predictions(predictions)
     pred_boxes = normalized_predictions["boxes"]
     pred_scores = normalized_predictions["scores"]
     pred_labels = normalized_predictions["labels"]
 
-    gt_labels_np = as_numpy(gt_labels, np.int64).reshape(-1) if gt_labels is not None else None
-    palette = build_label_palette(resolve_palette_size([pred_labels, gt_labels_np], class_names))
-    events: list[VisualizationEvent] = build_sample_metadata_events(root_path, sample_name)
+    gt_labels_np = (
+        as_numpy(gt_labels, np.int64).reshape(-1) if gt_labels is not None else None
+    )
+    palette = build_label_palette(
+        resolve_palette_size([pred_labels, gt_labels_np], class_names)
+    )
+    events: list[VisualizationEvent] = build_sample_metadata_events(
+        root_path, sample_name
+    )
     prediction_path = f"{root_path}/prediction/detections"
     ground_truth_path = f"{root_path}/ground_truth/detections"
     for detections_path in (prediction_path, ground_truth_path):
-        annotation_context = build_class_annotation_context(detections_path, palette, class_names)
+        annotation_context = build_class_annotation_context(
+            detections_path, palette, class_names
+        )
         if annotation_context is not None:
             events.append(annotation_context)
 
     if points is not None:
         events.extend(
-            build_lidar_reference_events(points, root_path=root_path, point_radius=point_radius)
+            build_lidar_reference_events(
+                points, root_path=root_path, point_radius=point_radius
+            )
         )
 
-    pred_colors = labels_to_colors(pred_labels, palette) if pred_labels.size > 0 else None
+    pred_colors = (
+        labels_to_colors(pred_labels, palette) if pred_labels.size > 0 else None
+    )
     pred_label_text = [
         format_class_label(int(label), class_names, float(score))
         for label, score in zip(pred_labels, pred_scores, strict=False)
@@ -193,7 +219,9 @@ def build_detection3d_events(
             )
         if gt_boxes_np.shape[0] != gt_labels_np.shape[0]:
             raise ValueError("ground-truth boxes and labels must have the same length")
-        gt_label_text = [format_class_label(int(label), class_names) for label in gt_labels_np]
+        gt_label_text = [
+            format_class_label(int(label), class_names) for label in gt_labels_np
+        ]
         events.append(
             Boxes3DEvent(
                 path=ground_truth_path,
@@ -214,7 +242,11 @@ def build_detection3d_events(
         for metric_name, metric_value in detection_iou_statistics(
             pred_boxes, pred_labels, gt_boxes_np, gt_labels_np
         ).items():
-            events.append(ScalarEvent(f"{root_path}/metrics/detection/{metric_name}", metric_value))
+            events.append(
+                ScalarEvent(
+                    f"{root_path}/metrics/detection/{metric_name}", metric_value
+                )
+            )
 
     return events
 
@@ -232,7 +264,10 @@ def _rectangle_corners(box: np.ndarray) -> np.ndarray:
         dtype=np.float32,
     )
     cosine, sine = np.cos(box[6]), np.sin(box[6])
-    return corners @ np.array([[cosine, sine], [-sine, cosine]], dtype=np.float32) + box[:2]
+    return (
+        corners @ np.array([[cosine, sine], [-sine, cosine]], dtype=np.float32)
+        + box[:2]
+    )
 
 
 def _polygon_area(polygon: np.ndarray) -> float:
@@ -258,7 +293,9 @@ def _inside(point: np.ndarray, edge_start: np.ndarray, edge_end: np.ndarray) -> 
     return _cross_2d(edge_end - edge_start, point - edge_start) >= -1e-6
 
 
-def _intersection(a: np.ndarray, b: np.ndarray, start: np.ndarray, end: np.ndarray) -> np.ndarray:
+def _intersection(
+    a: np.ndarray, b: np.ndarray, start: np.ndarray, end: np.ndarray
+) -> np.ndarray:
     direction, edge = b - a, end - start
     denominator = _cross_2d(direction, edge)
     if abs(denominator) < 1e-8:
@@ -288,7 +325,9 @@ def _convex_intersection(subject: np.ndarray, clip: np.ndarray) -> np.ndarray:
 
 def oriented_box_iou_3d(first: np.ndarray, second: np.ndarray) -> float:
     """Compute IoU for boxes represented as ``x,y,z,w,l,h,yaw``."""
-    bev = _polygon_area(_convex_intersection(_rectangle_corners(first), _rectangle_corners(second)))
+    bev = _polygon_area(
+        _convex_intersection(_rectangle_corners(first), _rectangle_corners(second))
+    )
     z_overlap = max(
         0.0,
         min(first[2] + first[5] * 0.5, second[2] + second[5] * 0.5)
@@ -340,7 +379,11 @@ def detection_iou_statistics(
     false_negatives = len(gt_boxes) - true_positives
     best_iou_per_ground_truth = [
         max(
-            (iou for iou, _, candidate_ground_truth in candidates if candidate_ground_truth == g),
+            (
+                iou
+                for iou, _, candidate_ground_truth in candidates
+                if candidate_ground_truth == g
+            ),
             default=0.0,
         )
         for g in range(len(gt_boxes))
@@ -353,8 +396,12 @@ def detection_iou_statistics(
         "precision": true_positives / len(pred_boxes) if len(pred_boxes) else 0.0,
         "recall": true_positives / len(gt_boxes) if len(gt_boxes) else 0.0,
         "mean_best_iou": (
-            float(np.mean(best_iou_per_ground_truth)) if best_iou_per_ground_truth else 0.0
+            float(np.mean(best_iou_per_ground_truth))
+            if best_iou_per_ground_truth
+            else 0.0
         ),
         "max_iou": max((item[0] for item in candidates), default=0.0),
-        "mean_matched_iou": float(np.mean([item[0] for item in matched])) if matched else 0.0,
+        "mean_matched_iou": float(np.mean([item[0] for item in matched]))
+        if matched
+        else 0.0,
     }

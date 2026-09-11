@@ -63,7 +63,26 @@ def test_create_visualization_backend_rejects_unknown_backends() -> None:
         create_visualization_backend(VisualizationSessionConfig(backend="sqlite"))
 
 
-def test_noop_backend_does_not_require_the_rerun_sdk(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"web_port": 0},
+        {"grpc_port": 65536},
+        {"web_port": 9090, "grpc_port": 9090},
+        {"application_id": ""},
+        {"timeline": ""},
+        {"server_memory_limit": ""},
+        {"point_color_mode": "rainbow"},
+    ],
+)
+def test_session_config_rejects_invalid_values(kwargs: dict[str, Any]) -> None:
+    with pytest.raises(ValueError):
+        VisualizationSessionConfig(**kwargs)
+
+
+def test_noop_backend_does_not_require_the_rerun_sdk(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Smoke tests must exercise the preview pipeline without the Rerun SDK."""
     real_import = builtins.__import__
 
