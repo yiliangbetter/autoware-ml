@@ -29,6 +29,7 @@ from autoware_ml.visualization.events import (
     Boxes3DEvent,
     ClearEvent,
     ImageEvent,
+    LineStrips2DEvent,
     PinholeEvent,
     PointCloud3DEvent,
     Points2DEvent,
@@ -89,7 +90,12 @@ class _FakeAnnotationContext:
         payload: Any = (
             [[]]
             if type(self).serializes_empty
-            else [[{"class_id": info["id"], "label": info["label"]} for info in self.context]]
+            else [
+                [
+                    {"class_id": info["id"], "label": info["label"]}
+                    for info in self.context
+                ]
+            ]
         )
         return [
             _FakeComponentBatch("rerun.components.AnnotationContextIndicator", [None]),
@@ -227,12 +233,22 @@ def _build_fake_rerun(calls: dict[str, Any]) -> Any:
             return _FakeImage(image)
 
         @staticmethod
-        def Points3D(*args: Any, **kwargs: Any) -> tuple[str, tuple[Any, ...], dict[str, Any]]:
+        def Points3D(
+            *args: Any, **kwargs: Any
+        ) -> tuple[str, tuple[Any, ...], dict[str, Any]]:
             return ("Points3D", args, kwargs)
 
         @staticmethod
-        def Points2D(*args: Any, **kwargs: Any) -> tuple[str, tuple[Any, ...], dict[str, Any]]:
+        def Points2D(
+            *args: Any, **kwargs: Any
+        ) -> tuple[str, tuple[Any, ...], dict[str, Any]]:
             return ("Points2D", args, kwargs)
+
+        @staticmethod
+        def LineStrips2D(
+            *args: Any, **kwargs: Any
+        ) -> tuple[str, tuple[Any, ...], dict[str, Any]]:
+            return ("LineStrips2D", args, kwargs)
 
         @staticmethod
         def Boxes3D(**kwargs: Any) -> tuple[str, dict[str, Any]]:
@@ -354,9 +370,13 @@ def test_backend_uses_the_supported_scalars_api(
     backend: RerunVisualizationBackend, rerun_calls: dict[str, Any]
 ) -> None:
     """``rr.Scalar`` is deprecated since rerun 0.23, so ``rr.Scalars`` must be used."""
-    backend.log_event(ScalarEvent(path="scene/metrics/detection/num_predictions", value=4.0))
+    backend.log_event(
+        ScalarEvent(path="scene/metrics/detection/num_predictions", value=4.0)
+    )
 
-    assert _logged(rerun_calls, "scene/metrics/detection/num_predictions") == [("Scalars", 4.0)]
+    assert _logged(rerun_calls, "scene/metrics/detection/num_predictions") == [
+        ("Scalars", 4.0)
+    ]
 
 
 def test_backend_translates_every_supported_event(
@@ -375,6 +395,10 @@ def test_backend_translates_every_supported_event(
             Points2DEvent(
                 path="scene/cameras/front/overlay",
                 positions=np.zeros((2, 2), np.float32),
+            ),
+            LineStrips2DEvent(
+                path="scene/cameras/front/boxes",
+                strips=[np.zeros((2, 2), np.float32)],
             ),
             Boxes3DEvent(
                 path="scene/prediction/detections",
@@ -402,6 +426,7 @@ def test_backend_translates_every_supported_event(
         "EncodedImage",
         "Points3D",
         "Points2D",
+        "LineStrips2D",
         "Boxes3D",
         "Transform3D",
         "Pinhole",
@@ -450,6 +475,14 @@ def test_backend_builds_named_comparison_views_without_root_origins(
                 image_from_camera=np.eye(3, dtype=np.float32),
                 resolution=(64, 36),
             ),
+            Points2DEvent(
+                path="scene/cameras/front/projected/ground_truth/segmentation",
+                positions=np.zeros((2, 2), np.float32),
+            ),
+            LineStrips2DEvent(
+                path="scene/cameras/front/projected/prediction/detections",
+                strips=[np.zeros((2, 2), np.float32)],
+            ),
             Boxes3DEvent(
                 path="scene/prediction/detections",
                 centers=np.zeros((1, 3), dtype=np.float32),
@@ -480,19 +513,30 @@ def test_backend_builds_named_comparison_views_without_root_origins(
     assert "Prediction · Semantic" in serialized
     assert "GT · Intensity" in serialized
     assert "Prediction · Entropy" in serialized
+    assert "front · GT" in serialized
+    assert "front · Prediction" in serialized
+    assert "scene/cameras/front/projected/ground_truth/segmentation" in serialized
+    assert "scene/cameras/front/projected/prediction/detections" in serialized
     assert "3D IoU quality" in serialized
     assert "GT mean best IoU" in serialized
     assert "Frame max IoU" in serialized
     assert "Matched mean IoU (>=0.5)" in serialized
     assert (
-        "'/scene/cameras': {'kind': 'EntityBehavior', 'args': (), 'visible': False}" in serialized
+        "'/scene/cameras': {'kind': 'EntityBehavior', 'args': (), 'visible': False}"
+        in serialized
     )
-    assert "'/scene/prediction/detections': ('Boxes3D', {'show_labels': False})" in serialized
+    assert (
+        "'/scene/prediction/detections': ('Boxes3D', {'show_labels': False})"
+        in serialized
+    )
     assert "'origin': '/'" not in serialized
     assert "'auto_views': False" in serialized
     assert "'kind': 'TimePanel', 'args': (), 'expanded': False" in serialized
     assert "'kind': 'BlueprintPanel', 'args': (), 'expanded': True" in serialized
-    assert "'kind': 'VisualizerOverrides', 'args': (['SeriesLines', 'SeriesPoints'],)" in serialized
+    assert (
+        "'kind': 'VisualizerOverrides', 'args': (['SeriesLines', 'SeriesPoints'],)"
+        in serialized
+    )
     assert "('SeriesPoints', {'names': 'Precision', 'marker_sizes': 8.0})" in serialized
     assert "'row_shares': [2.0, 1.0]" in serialized
     assert "'kind': 'VisibleTimeRange', 'args': ('frame',)" in serialized
@@ -546,7 +590,10 @@ def test_backend_can_show_camera_geometry_initially(
 
     blueprint, _ = rerun_calls["blueprints"][-1]
     serialized = repr(blueprint)
-    assert "'/scene/cameras': {'kind': 'EntityBehavior', 'args': (), 'visible': True}" in serialized
+    assert (
+        "'/scene/cameras': {'kind': 'EntityBehavior', 'args': (), 'visible': True}"
+        in serialized
+    )
 
 
 def test_backend_converts_yaw_to_a_z_axis_quaternion(

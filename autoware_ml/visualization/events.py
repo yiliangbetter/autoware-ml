@@ -83,6 +83,18 @@ class Points2DEvent:
 
 
 @dataclass(frozen=True)
+class LineStrips2DEvent:
+    """Log one or more 2D polylines, typically projected 3D box edges."""
+
+    path: str
+    strips: list[FloatArray]
+    colors: ColorArray | None = None
+    labels: list[str] | None = None
+    radii: Radius | None = None
+    class_ids: IntArray | None = None
+
+
+@dataclass(frozen=True)
 class Boxes3DEvent:
     """Log 3D boxes in metric space."""
 
@@ -144,6 +156,7 @@ VisualizationEvent: TypeAlias = (
     | ImageEvent
     | PointCloud3DEvent
     | Points2DEvent
+    | LineStrips2DEvent
     | Boxes3DEvent
     | Transform3DEvent
     | PinholeEvent

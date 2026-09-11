@@ -31,6 +31,7 @@ from autoware_ml.visualization.events import (
     Boxes3DEvent,
     ClearEvent,
     ImageEvent,
+    LineStrips2DEvent,
     PinholeEvent,
     PointCloud3DEvent,
     Points2DEvent,
@@ -144,7 +145,9 @@ def _yaw_to_quaternions(yaws: np.ndarray) -> np.ndarray:
 class _RerunVisualizationBackendBase:
     """Shared Rerun event translation."""
 
-    def _initialize_recording(self, config: VisualizationSessionConfig, *, spawn: bool) -> None:
+    def _initialize_recording(
+        self, config: VisualizationSessionConfig, *, spawn: bool
+    ) -> None:
         """Initialize one Rerun recording."""
         self.timeline = config.timeline
         self.rr = _load_rerun_module()
@@ -158,7 +161,9 @@ class _RerunVisualizationBackendBase:
         )
         self._fused_blueprint_sent = False
         if config.point_color_mode not in POINT_COLOR_MODES:
-            raise ValueError("point color mode must be 'semantic', 'intensity', or 'solid'")
+            raise ValueError(
+                "point color mode must be 'semantic', 'intensity', or 'solid'"
+            )
         self.point_color_mode = config.point_color_mode
         self.camera_frustums_visible = config.camera_frustums_visible
         self._observed_paths: set[str] = set()
@@ -201,7 +206,9 @@ class _RerunVisualizationBackendBase:
             # Camera frames dominate remote recordings when logged as raw RGB.
             # Rerun preserves the same image entity and projection behavior
             # while JPEG compression substantially reduces memory and transfer.
-            self.rr.log(event.path, self.rr.Image(event.image).compress(jpeg_quality=95))
+            self.rr.log(
+                event.path, self.rr.Image(event.image).compress(jpeg_quality=95)
+            )
             return
 
         if isinstance(event, PointCloud3DEvent):
@@ -223,6 +230,20 @@ class _RerunVisualizationBackendBase:
                 event.path,
                 self.rr.Points2D(
                     event.positions,
+                    colors=event.colors,
+                    labels=event.labels,
+                    radii=event.radii,
+                    show_labels=event.labels is not None,
+                    class_ids=event.class_ids,
+                ),
+            )
+            return
+
+        if isinstance(event, LineStrips2DEvent):
+            self.rr.log(
+                event.path,
+                self.rr.LineStrips2D(
+                    event.strips,
                     colors=event.colors,
                     labels=event.labels,
                     radii=event.radii,
@@ -351,7 +372,9 @@ class _RerunVisualizationBackendBase:
             overrides["/scene/cameras"] = self.rr.blueprint.EntityBehavior(
                 visible=self.camera_frustums_visible
             )
-        if detection_path is not None and detection_path.startswith("scene/prediction/"):
+        if detection_path is not None and detection_path.startswith(
+            "scene/prediction/"
+        ):
             # Decoded detectors can legitimately emit hundreds of proposals.
             # Keep every box and its label in the recording, but hide floating
             # prediction labels initially so they do not cover the point cloud.
@@ -398,7 +421,9 @@ class _RerunVisualizationBackendBase:
         def series_overrides(paths: list[str]) -> dict[str, list[Any]]:
             return {
                 path: [
-                    self.rr.blueprint.VisualizerOverrides(["SeriesLines", "SeriesPoints"]),
+                    self.rr.blueprint.VisualizerOverrides(
+                        ["SeriesLines", "SeriesPoints"]
+                    ),
                     self.rr.SeriesPoints(
                         names=_DETECTION_METRIC_LABELS[path.rsplit("/", 1)[-1]],
                         marker_sizes=8.0,
@@ -414,7 +439,9 @@ class _RerunVisualizationBackendBase:
                     name="3D IoU quality",
                     origin=metrics_root,
                     contents=quality_paths,
-                    axis_y=self.rr.blueprint.ScalarAxis(range=(0.0, 1.0), zoom_lock=True),
+                    axis_y=self.rr.blueprint.ScalarAxis(
+                        range=(0.0, 1.0), zoom_lock=True
+                    ),
                     overrides=series_overrides(quality_paths),
                     time_ranges=visible_time_range(),
                 )
@@ -483,25 +510,75 @@ class _RerunVisualizationBackendBase:
         )
 
     def _camera_tab(self, camera_paths: list[str]) -> Any:
-        """Build inspectable 2D camera views while 3D views show their frustums."""
-        return self.rr.blueprint.Tabs(
-            *[
-                self.rr.blueprint.Spatial2DView(
-                    name=path.rsplit("/", 1)[-1],
-                    origin=path,
-                    contents=[path],
+        """Build per-camera GT/prediction views with persistent projections."""
+        camera_tabs = []
+        for path in camera_paths:
+            camera_name = path.rsplit("/", 1)[-1]
+            ground_truth_paths = sorted(
+                observed_path
+                for observed_path in self._observed_paths
+                if observed_path.startswith(f"{path}/projected/ground_truth/")
+            )
+            prediction_paths = sorted(
+                observed_path
+                for observed_path in self._observed_paths
+                if observed_path.startswith(f"{path}/projected/prediction/")
+            )
+            shared_paths = sorted(
+                observed_path
+                for observed_path in self._observed_paths
+                if observed_path.startswith(f"{path}/projected/")
+                and observed_path not in ground_truth_paths
+                and observed_path not in prediction_paths
+            )
+            comparison_views = []
+            if ground_truth_paths:
+                comparison_views.append(
+                    self.rr.blueprint.Spatial2DView(
+                        name=f"{camera_name} · GT",
+                        origin=path,
+                        contents=[path, *shared_paths, *ground_truth_paths],
+                    )
                 )
-                for path in camera_paths
-            ],
+            if prediction_paths:
+                comparison_views.append(
+                    self.rr.blueprint.Spatial2DView(
+                        name=f"{camera_name} · Prediction",
+                        origin=path,
+                        contents=[path, *shared_paths, *prediction_paths],
+                    )
+                )
+            if not comparison_views:
+                comparison_views.append(
+                    self.rr.blueprint.Spatial2DView(
+                        name=camera_name,
+                        origin=path,
+                        contents=[path, *shared_paths],
+                    )
+                )
+            camera_tabs.append(
+                comparison_views[0]
+                if len(comparison_views) == 1
+                else self.rr.blueprint.Horizontal(
+                    *comparison_views,
+                    name=f"{camera_name} comparison",
+                )
+            )
+        return self.rr.blueprint.Tabs(
+            *camera_tabs,
             name="Cameras",
         )
 
     def _send_scene_blueprint_if_needed(self) -> None:
         """Publish a requirements-driven scene blueprint as entities appear."""
         scene_paths = frozenset(
-            path for path in self._observed_paths if path == "scene" or path.startswith("scene/")
+            path
+            for path in self._observed_paths
+            if path == "scene" or path.startswith("scene/")
         )
-        signature = scene_paths | frozenset(f"@camera:{path}" for path in self._camera_paths)
+        signature = scene_paths | frozenset(
+            f"@camera:{path}" for path in self._camera_paths
+        )
         if not scene_paths or signature == self._scene_blueprint_signature:
             return
 
