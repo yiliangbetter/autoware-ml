@@ -28,9 +28,11 @@ from autoware_ml.visualization.contracts import VisualizationSessionConfig
 from autoware_ml.visualization.common import POINT_COLOR_MODES
 from autoware_ml.visualization.events import (
     AnnotationContextEvent,
+    BlueprintEvent,
     Boxes3DEvent,
     ClearEvent,
     ImageEvent,
+    LayoutGroup,
     LineStrips2DEvent,
     PinholeEvent,
     PointCloud3DEvent,
@@ -38,21 +40,16 @@ from autoware_ml.visualization.events import (
     ScalarEvent,
     TextEvent,
     Transform3DEvent,
+    ViewOverride,
+    ViewSpec,
     VisualizationEvent,
+)
+from autoware_ml.visualization.layouts import (
+    build_calibration_blueprint,
+    build_scene_blueprint,
 )
 
 logger = logging.getLogger(__name__)
-
-_DETECTION_METRIC_LABELS = {
-    "precision": "Precision",
-    "recall": "Recall",
-    "mean_best_iou": "GT mean best IoU",
-    "max_iou": "Frame max IoU",
-    "mean_matched_iou": "Matched mean IoU (>=0.5)",
-    "true_positives": "True positives",
-    "false_positives": "False positives",
-    "false_negatives": "False negatives",
-}
 
 
 def _load_rerun_module() -> Any:
@@ -169,6 +166,7 @@ class _RerunVisualizationBackendBase:
         self._observed_paths: set[str] = set()
         self._camera_paths: set[str] = set()
         self._scene_blueprint_signature: frozenset[str] = frozenset()
+        self._explicit_blueprint_received = False
 
     def wait_until_interrupted(self) -> None:
         """Return immediately because no viewer is served by default."""
@@ -183,6 +181,10 @@ class _RerunVisualizationBackendBase:
 
     def log_event(self, event: VisualizationEvent) -> None:
         """Translate one visualization event into rerun entities."""
+        if isinstance(event, BlueprintEvent):
+            self._send_blueprint(event)
+            return
+
         if isinstance(event, AnnotationContextEvent):
             # Logged statically so one legend covers every frame on the timeline
             # instead of being resolved per step by latest-at semantics.
@@ -305,272 +307,137 @@ class _RerunVisualizationBackendBase:
 
         raise TypeError(f"Unsupported visualization event: {type(event)!r}")
 
-    def _send_fused_blueprint_if_needed(self, events: list[VisualizationEvent]) -> None:
-        """Put the fused image and its layers in one Rerun 2D view."""
-        if self._fused_blueprint_sent:
-            return
-        fused_paths = [
-            event.path
-            for event in events
-            if isinstance(event, ImageEvent) and event.path.endswith("/camera/fused")
-        ]
-        raw_paths = [
-            event.path
-            for event in events
-            if isinstance(event, ImageEvent) and event.path.endswith("/camera/image")
-        ]
-        if not fused_paths:
-            return
-        fused_path = fused_paths[0]
-        raw_path = raw_paths[0] if raw_paths else None
-        self.rr.send_blueprint(
-            self.rr.blueprint.Blueprint(
-                self.rr.blueprint.Horizontal(
-                    *(
-                        [
-                            self.rr.blueprint.Spatial2DView(
-                                name="Raw camera",
-                                origin=raw_path,
-                                contents=[raw_path, f"{raw_path}/projected_points"],
-                            )
-                        ]
-                        if raw_path
-                        else []
-                    ),
-                    self.rr.blueprint.Spatial2DView(
-                        name="Fused camera",
-                        origin=fused_path,
-                        contents=[
-                            fused_path,
-                            f"{fused_path}/depth",
-                            f"{fused_path}/intensity",
-                        ],
-                    ),
-                ),
-                auto_views=False,
+    def _convert_view_override(self, override: ViewOverride) -> Any:
+        """Translate one neutral entity override into Rerun components."""
+        components = []
+        if override.visible is not None:
+            components.append(
+                self.rr.blueprint.EntityBehavior(visible=override.visible)
             )
-        )
-        self._fused_blueprint_sent = True
-
-    def _scene_view(
-        self,
-        *,
-        name: str,
-        point_path: str | None,
-        detection_path: str | None,
-    ) -> Any:
-        """Build one scene with a native visibility toggle for camera geometry."""
-        contents = []
-        if point_path is not None and point_path in self._observed_paths:
-            contents.append(point_path)
-        if detection_path is not None and detection_path in self._observed_paths:
-            contents.append(detection_path)
-        if self._camera_paths:
-            contents.append("scene/cameras/**")
-        overrides = {}
-        if self._camera_paths:
-            overrides["/scene/cameras"] = self.rr.blueprint.EntityBehavior(
-                visible=self.camera_frustums_visible
-            )
-        if detection_path is not None and detection_path.startswith(
-            "scene/prediction/"
-        ):
-            # Decoded detectors can legitimately emit hundreds of proposals.
-            # Keep every box and its label in the recording, but hide floating
-            # prediction labels initially so they do not cover the point cloud.
-            # Rerun's Show labels property remains editable live in the viewer.
-            overrides[f"/{detection_path}"] = self.rr.Boxes3D(show_labels=False)
-        return self.rr.blueprint.Spatial3DView(
-            name=name,
-            origin="scene",
-            contents=contents,
-            overrides=overrides or None,
-        )
-
-    def _detection_statistics_views(self) -> list[Any]:
-        """Build compact IoU quality and match-count charts when GT exists."""
-        metrics_root = "scene/metrics/detection"
-        quality_paths = [
-            f"{metrics_root}/{name}"
-            for name in (
-                "precision",
-                "recall",
-                "mean_best_iou",
-                "max_iou",
-                "mean_matched_iou",
-            )
-            if f"{metrics_root}/{name}" in self._observed_paths
-        ]
-        count_paths = [
-            f"{metrics_root}/{name}"
-            for name in ("true_positives", "false_positives", "false_negatives")
-            if f"{metrics_root}/{name}" in self._observed_paths
-        ]
-
-        def visible_time_range() -> list[Any]:
-            # Rerun blueprint archetypes are single-use component batches; each
-            # view needs its own instance rather than sharing one object.
-            return [
-                self.rr.blueprint.VisibleTimeRange(
-                    self.timeline,
-                    start=self.rr.blueprint.TimeRangeBoundary.cursor_relative(seq=-10),
-                    end=self.rr.blueprint.TimeRangeBoundary.cursor_relative(seq=10),
-                )
-            ]
-
-        def series_overrides(paths: list[str]) -> dict[str, list[Any]]:
-            return {
-                path: [
+        if override.show_labels is not None:
+            components.append(self.rr.Boxes3D(show_labels=override.show_labels))
+        if override.series_name is not None or override.marker_size is not None:
+            components.extend(
+                [
                     self.rr.blueprint.VisualizerOverrides(
                         ["SeriesLines", "SeriesPoints"]
                     ),
                     self.rr.SeriesPoints(
-                        names=_DETECTION_METRIC_LABELS[path.rsplit("/", 1)[-1]],
-                        marker_sizes=8.0,
+                        names=override.series_name,
+                        marker_sizes=override.marker_size,
                     ),
                 ]
-                for path in paths
-            }
+            )
+        if not components:
+            raise ValueError(f"View override for {override.path!r} has no behavior")
+        return components[0] if len(components) == 1 else components
 
-        views = []
-        if quality_paths:
-            views.append(
-                self.rr.blueprint.TimeSeriesView(
-                    name="3D IoU quality",
-                    origin=metrics_root,
-                    contents=quality_paths,
-                    axis_y=self.rr.blueprint.ScalarAxis(
-                        range=(0.0, 1.0), zoom_lock=True
-                    ),
-                    overrides=series_overrides(quality_paths),
-                    time_ranges=visible_time_range(),
-                )
-            )
-        if count_paths:
-            views.append(
-                self.rr.blueprint.TimeSeriesView(
-                    name="Detection matches",
-                    origin=metrics_root,
-                    contents=count_paths,
-                    overrides=series_overrides(count_paths),
-                    time_ranges=visible_time_range(),
-                )
-            )
-        return views
+    def _convert_layout(self, layout: ViewSpec | LayoutGroup) -> Any:
+        """Translate a backend-neutral recursive layout into Rerun blueprint parts."""
+        if isinstance(layout, LayoutGroup):
+            children = [self._convert_layout(child) for child in layout.children]
+            kwargs: dict[str, Any] = {}
+            if layout.name is not None:
+                kwargs["name"] = layout.name
+            if layout.kind == "horizontal":
+                if layout.shares is not None:
+                    kwargs["column_shares"] = list(layout.shares)
+                return self.rr.blueprint.Horizontal(*children, **kwargs)
+            if layout.kind == "vertical":
+                if layout.shares is not None:
+                    kwargs["row_shares"] = list(layout.shares)
+                return self.rr.blueprint.Vertical(*children, **kwargs)
+            if layout.kind == "tabs":
+                if layout.active is not None:
+                    kwargs["active_tab"] = layout.active
+                return self.rr.blueprint.Tabs(*children, **kwargs)
+            raise ValueError(f"Unknown layout group kind: {layout.kind}")
 
-    def _comparison_tab(
-        self,
-        *,
-        name: str,
-        ground_truth_points: str | None,
-        prediction_points: str | None,
-    ) -> Any:
-        """Build side-by-side GT and prediction scenes plus IoU statistics."""
-        scene_views = []
-        if any(
-            path in self._observed_paths
-            for path in (
-                "scene/ground_truth/segmentation",
-                "scene/ground_truth/detections",
-            )
-        ):
-            scene_views.append(
-                self._scene_view(
-                    name=f"GT · {name}",
-                    point_path=ground_truth_points,
-                    detection_path="scene/ground_truth/detections",
+        overrides = {
+            override.path: self._convert_view_override(override)
+            for override in layout.overrides
+        }
+        kwargs = {
+            "name": layout.name,
+            "origin": layout.origin,
+            "contents": list(layout.contents),
+        }
+        if overrides:
+            kwargs["overrides"] = overrides
+        if layout.kind == "spatial3d":
+            return self.rr.blueprint.Spatial3DView(**kwargs)
+        if layout.kind == "spatial2d":
+            return self.rr.blueprint.Spatial2DView(**kwargs)
+        if layout.kind == "text_log":
+            return self.rr.blueprint.TextLogView(**kwargs)
+        if layout.kind == "time_series":
+            if layout.y_range is not None:
+                kwargs["axis_y"] = self.rr.blueprint.ScalarAxis(
+                    range=layout.y_range,
+                    zoom_lock=True,
+                )
+            if layout.visible_time_range is not None:
+                start, end = layout.visible_time_range
+                kwargs["time_ranges"] = [
+                    self.rr.blueprint.VisibleTimeRange(
+                        layout.timeline or self.timeline,
+                        start=self.rr.blueprint.TimeRangeBoundary.cursor_relative(
+                            seq=start
+                        ),
+                        end=self.rr.blueprint.TimeRangeBoundary.cursor_relative(
+                            seq=end
+                        ),
+                    )
+                ]
+            return self.rr.blueprint.TimeSeriesView(**kwargs)
+        raise ValueError(f"Unknown view kind: {layout.kind}")
+
+    def _send_blueprint(self, event: BlueprintEvent) -> None:
+        """Translate and publish one backend-neutral blueprint request."""
+        parts = [self._convert_layout(event.layout)]
+        if event.blueprint_panel_expanded is not None:
+            parts.append(
+                self.rr.blueprint.BlueprintPanel(
+                    expanded=event.blueprint_panel_expanded
                 )
             )
-        if any(
-            path in self._observed_paths
-            for path in (
-                "scene/prediction/segmentation",
-                "scene/prediction/detections",
-            )
-        ):
-            scene_views.append(
-                self._scene_view(
-                    name=f"Prediction · {name}",
-                    point_path=prediction_points,
-                    detection_path="scene/prediction/detections",
+        if event.selection_panel_expanded is not None:
+            parts.append(
+                self.rr.blueprint.SelectionPanel(
+                    expanded=event.selection_panel_expanded
                 )
             )
-        comparison = self.rr.blueprint.Horizontal(
-            *scene_views,
-            name=f"{name} comparison",
-        )
-        statistics = self._detection_statistics_views()
-        if not statistics:
-            return comparison
-        return self.rr.blueprint.Vertical(
-            comparison,
-            self.rr.blueprint.Horizontal(*statistics, name="Detection statistics"),
-            row_shares=[2.0, 1.0],
-            name=f"{name} comparison",
+        if event.time_panel_expanded is not None:
+            parts.append(
+                self.rr.blueprint.TimePanel(expanded=event.time_panel_expanded)
+            )
+        blueprint_options: dict[str, Any] = {"auto_views": event.auto_views}
+        if event.auto_layout is not None:
+            blueprint_options["auto_layout"] = event.auto_layout
+        send_options = {}
+        if event.make_active is not None:
+            send_options["make_active"] = event.make_active
+        if event.make_default is not None:
+            send_options["make_default"] = event.make_default
+        self.rr.send_blueprint(
+            self.rr.blueprint.Blueprint(*parts, **blueprint_options),
+            **send_options,
         )
 
-    def _camera_tab(self, camera_paths: list[str]) -> Any:
-        """Build per-camera GT/prediction views with persistent projections."""
-        camera_tabs = []
-        for path in camera_paths:
-            camera_name = path.rsplit("/", 1)[-1]
-            ground_truth_paths = sorted(
-                observed_path
-                for observed_path in self._observed_paths
-                if observed_path.startswith(f"{path}/projected/ground_truth/")
-            )
-            prediction_paths = sorted(
-                observed_path
-                for observed_path in self._observed_paths
-                if observed_path.startswith(f"{path}/projected/prediction/")
-            )
-            shared_paths = sorted(
-                observed_path
-                for observed_path in self._observed_paths
-                if observed_path.startswith(f"{path}/projected/")
-                and observed_path not in ground_truth_paths
-                and observed_path not in prediction_paths
-            )
-            comparison_views = []
-            if ground_truth_paths:
-                comparison_views.append(
-                    self.rr.blueprint.Spatial2DView(
-                        name=f"{camera_name} · GT",
-                        origin=path,
-                        contents=[path, *shared_paths, *ground_truth_paths],
-                    )
-                )
-            if prediction_paths:
-                comparison_views.append(
-                    self.rr.blueprint.Spatial2DView(
-                        name=f"{camera_name} · Prediction",
-                        origin=path,
-                        contents=[path, *shared_paths, *prediction_paths],
-                    )
-                )
-            if not comparison_views:
-                comparison_views.append(
-                    self.rr.blueprint.Spatial2DView(
-                        name=camera_name,
-                        origin=path,
-                        contents=[path, *shared_paths],
-                    )
-                )
-            camera_tabs.append(
-                comparison_views[0]
-                if len(comparison_views) == 1
-                else self.rr.blueprint.Horizontal(
-                    *comparison_views,
-                    name=f"{camera_name} comparison",
-                )
-            )
-        return self.rr.blueprint.Tabs(
-            *camera_tabs,
-            name="Cameras",
-        )
+    def _send_fused_blueprint_if_needed(self, events: list[VisualizationEvent]) -> None:
+        """Publish the neutral calibration layout once its images arrive."""
+        if self._fused_blueprint_sent:
+            return
+        blueprint = build_calibration_blueprint(events)
+        if blueprint is None:
+            return
+        self._send_blueprint(blueprint)
+        self._fused_blueprint_sent = True
 
     def _send_scene_blueprint_if_needed(self) -> None:
-        """Publish a requirements-driven scene blueprint as entities appear."""
+        """Publish the neutral built-in scene layout as entities appear."""
+        if self._explicit_blueprint_received:
+            return
         scene_paths = frozenset(
             path
             for path in self._observed_paths
@@ -579,114 +446,30 @@ class _RerunVisualizationBackendBase:
         signature = scene_paths | frozenset(
             f"@camera:{path}" for path in self._camera_paths
         )
-        if not scene_paths or signature == self._scene_blueprint_signature:
+        if signature == self._scene_blueprint_signature:
             return
-
-        tabs: list[tuple[str, Any]] = []
-        if any(path.endswith("/segmentation") for path in scene_paths):
-            tabs.append(
-                (
-                    "Semantic",
-                    self._comparison_tab(
-                        name="Semantic",
-                        ground_truth_points="scene/ground_truth/segmentation",
-                        prediction_points="scene/prediction/segmentation",
-                    ),
-                )
-            )
-        if "scene/lidar/intensity" in scene_paths:
-            tabs.append(
-                (
-                    "Intensity",
-                    self._comparison_tab(
-                        name="Intensity",
-                        ground_truth_points="scene/lidar/intensity",
-                        prediction_points="scene/lidar/intensity",
-                    ),
-                )
-            )
-        if "scene/lidar/solid" in scene_paths:
-            tabs.append(
-                (
-                    "Geometry",
-                    self._comparison_tab(
-                        name="Geometry",
-                        ground_truth_points="scene/lidar/solid",
-                        prediction_points="scene/lidar/solid",
-                    ),
-                )
-            )
-        if not tabs and any(path.endswith("/detections") for path in scene_paths):
-            tabs.append(
-                (
-                    "Detections",
-                    self._comparison_tab(
-                        name="Detections",
-                        ground_truth_points=None,
-                        prediction_points=None,
-                    ),
-                )
-            )
-        if "scene/prediction/entropy" in scene_paths:
-            tabs.append(
-                (
-                    "Uncertainty",
-                    self.rr.blueprint.Horizontal(
-                        self._scene_view(
-                            name="Prediction · Entropy",
-                            point_path="scene/prediction/entropy",
-                            detection_path="scene/prediction/detections",
-                        ),
-                        self._scene_view(
-                            name="Prediction · Semantic",
-                            point_path="scene/prediction/segmentation",
-                            detection_path="scene/prediction/detections",
-                        ),
-                        name="Uncertainty",
-                    ),
-                )
-            )
-        camera_paths = sorted(self._camera_paths)
-        if camera_paths:
-            tabs.append(("Cameras", self._camera_tab(camera_paths)))
-        if not tabs:
-            return
-
-        preferred_tab = {
-            "semantic": "Semantic",
-            "intensity": "Intensity",
-            "solid": "Geometry",
-        }[self.point_color_mode]
-        tab_names = [name for name, _ in tabs]
-        active_tab = tab_names.index(preferred_tab) if preferred_tab in tab_names else 0
-        self.rr.send_blueprint(
-            self.rr.blueprint.Blueprint(
-                self.rr.blueprint.Tabs(
-                    *[tab for _, tab in tabs],
-                    active_tab=active_tab,
-                    name="Multi-task visualization",
-                ),
-                # Camera visibility is a per-view blueprint property. Keep the
-                # native tree open when cameras exist so its eye control is
-                # immediately available without restarting the visualization.
-                self.rr.blueprint.BlueprintPanel(expanded=bool(camera_paths)),
-                self.rr.blueprint.SelectionPanel(expanded=False),
-                self.rr.blueprint.TimePanel(expanded=False),
-                auto_layout=False,
-                auto_views=False,
-            ),
-            make_active=True,
-            make_default=True,
+        blueprint = build_scene_blueprint(
+            scene_paths,
+            self._camera_paths,
+            point_color_mode=self.point_color_mode,
+            camera_frustums_visible=self.camera_frustums_visible,
+            timeline=self.timeline,
         )
+        if blueprint is None:
+            return
+        self._send_blueprint(blueprint)
         self._scene_blueprint_signature = signature
 
     def log_events(self, events: Iterable[VisualizationEvent]) -> None:
         """Log multiple visualization events."""
         event_list = list(events)
+        if any(isinstance(event, BlueprintEvent) for event in event_list):
+            self._explicit_blueprint_received = True
         for event in event_list:
-            self._observed_paths.add(event.path)
-            if isinstance(event, PinholeEvent):
-                self._camera_paths.add(event.path)
+            if not isinstance(event, (BlueprintEvent, ClearEvent)):
+                self._observed_paths.add(event.path)
+                if isinstance(event, PinholeEvent):
+                    self._camera_paths.add(event.path)
             self.log_event(event)
         self._send_fused_blueprint_if_needed(event_list)
         self._send_scene_blueprint_if_needed()

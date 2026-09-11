@@ -27,11 +27,13 @@ from autoware_ml.visualization.cameras import CameraPointProjection
 from autoware_ml.visualization.contracts import VisualizationSessionConfig
 from autoware_ml.visualization.events import (
     Boxes3DEvent,
+    BlueprintEvent,
     ClearEvent,
     ImageEvent,
     PointCloud3DEvent,
     Points2DEvent,
     Transform3DEvent,
+    ViewSpec,
 )
 from autoware_ml.visualization.session import VisualizationSession
 
@@ -51,6 +53,24 @@ def test_session_forwards_steps_and_events(recording_backend: RecordingBackend) 
 
     assert recording_backend.steps == [7]
     assert recording_backend.events
+
+
+def test_session_accepts_events_from_an_external_task_adapter(
+    recording_backend: RecordingBackend,
+) -> None:
+    session = VisualizationSession(recording_backend)
+    blueprint = BlueprintEvent(
+        layout=ViewSpec(
+            kind="spatial3d",
+            name="New task",
+            origin="new_task",
+            contents=("new_task/output",),
+        )
+    )
+
+    session.log_events([blueprint])
+
+    assert recording_backend.events == [blueprint]
 
 
 def test_session_begins_replacement_frame_and_forwards_timestamp(
