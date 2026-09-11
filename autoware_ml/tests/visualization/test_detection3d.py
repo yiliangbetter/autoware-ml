@@ -106,7 +106,9 @@ def test_build_detection3d_events_logs_frame_metrics() -> None:
         gt_labels=np.array([1], dtype=np.int64),
     )
 
-    metrics = {event.path: event.value for event in events if isinstance(event, ScalarEvent)}
+    metrics = {
+        event.path: event.value for event in events if isinstance(event, ScalarEvent)
+    }
     assert metrics["scene/metrics/detection/num_predictions"] == 1.0
     assert metrics["scene/metrics/detection/num_ground_truth"] == 1.0
     assert metrics["scene/metrics/detection/mean_score"] == pytest.approx(0.9)
@@ -114,6 +116,26 @@ def test_build_detection3d_events_logs_frame_metrics() -> None:
     assert metrics["scene/metrics/detection/mean_best_iou"] == pytest.approx(1.0)
     assert metrics["scene/metrics/detection/max_iou"] == pytest.approx(1.0)
     assert metrics["scene/metrics/detection/mean_matched_iou"] == pytest.approx(1.0)
+
+
+@pytest.mark.parametrize(
+    ("gt_boxes", "gt_labels"),
+    [(_ONE_BOX, None), (None, np.array([1], dtype=np.int64))],
+)
+def test_build_detection3d_events_rejects_incomplete_ground_truth(
+    gt_boxes: np.ndarray | None,
+    gt_labels: np.ndarray | None,
+) -> None:
+    with pytest.raises(ValueError, match="both be provided or both omitted"):
+        build_detection3d_events(
+            {
+                "bboxes": _ONE_BOX,
+                "scores": np.array([0.9], dtype=np.float32),
+                "labels": np.array([1], dtype=np.int64),
+            },
+            gt_boxes=gt_boxes,
+            gt_labels=gt_labels,
+        )
 
 
 def test_detection_iou_matches_same_class_boxes_only() -> None:
@@ -160,7 +182,9 @@ def test_build_detection3d_events_legend_covers_every_declared_class() -> None:
         class_names=["pedestrian", "car", "truck"],
     )
 
-    context = next(event for event in events if isinstance(event, AnnotationContextEvent))
+    context = next(
+        event for event in events if isinstance(event, AnnotationContextEvent)
+    )
     assert [annotation.label for annotation in context.annotations] == [
         "pedestrian",
         "car",

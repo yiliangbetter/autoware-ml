@@ -16,7 +16,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from copy import deepcopy
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -69,6 +69,24 @@ class VisualizationPreviewConfig:
         default_factory=VisualizationSessionConfig
     )
     point_color_mode: Literal["semantic", "intensity", "solid"] = "semantic"
+
+    def __post_init__(self) -> None:
+        """Reject invalid preview settings before dataset or model setup."""
+        if self.mode not in {"auto", "predictions", "data"}:
+            raise ValueError(f"Unknown visualization mode: {self.mode}")
+        if self.split not in {"train", "val", "test", "predict"}:
+            raise ValueError(f"Unknown visualization split: {self.split}")
+        if self.sample_index < 0:
+            raise ValueError("sample_index must not be negative")
+        if self.max_samples <= 0:
+            raise ValueError("max_samples must be greater than zero")
+        if self.prediction_frequency_hz <= 0:
+            raise ValueError("prediction_frequency_hz must be greater than zero")
+        if self.point_color_mode not in {"semantic", "intensity", "solid"}:
+            raise ValueError(
+                "point color mode must be 'semantic', 'intensity', or 'solid'"
+            )
+        resolve_preview_device(self.device)
 
 
 def resolve_preview_device(device: str) -> torch.device:
@@ -323,6 +341,7 @@ def _log_preview_sample(
     raw_info: dict[str, Any] | None = None,
 ) -> None:
     """Dispatch one preview sample to the task-appropriate visualization adapter."""
+    _validate_preview_sample(batch)
     task = _infer_preview_task(batch, predictions)
     sample_name = _infer_sample_name(batch, dataset_index)
 
@@ -394,6 +413,18 @@ def _infer_preview_task(batch: dict[str, Any], predictions: Any) -> PreviewTask:
         f"Ambiguous visualization task: sample matches {', '.join(matches)}. "
         f"Observed batch keys: {observed_keys}."
     )
+
+
+def _validate_preview_sample(batch: dict[str, Any]) -> None:
+    """Reject incomplete task contracts before dispatch can hide them."""
+    has_boxes = batch.get("gt_boxes") is not None
+    has_labels = batch.get("gt_labels") is not None
+    if has_boxes != has_labels:
+        missing = "gt_labels" if has_boxes else "gt_boxes"
+        raise ValueError(
+            "Detection ground truth is incomplete: "
+            f"{missing!r} is required when its paired field is present."
+        )
 
 
 def _resolve_class_names(
@@ -606,13 +637,18 @@ def _log_segmentation_preview(
     """Render one 3D segmentation preview sample."""
     gt_labels = _get_segmentation_gt_labels(batch)
     pred_labels = predictions["pred_labels"]
+    pred_logits = predictions.get("pred_logits")
+    if pred_logits is None:
+        raise ValueError(
+            "Segmentation predictions must include 'pred_logits' for pointwise entropy."
+        )
     points = _get_segmentation_points(batch, pred_labels)
     class_names = _resolve_class_names(config, batch, raw_info, task="segmentation3d")
     session.log_segmentation3d(
         points,
         pred_labels,
         pred_probs=predictions.get("pred_probs"),
-        pred_logits=predictions.get("pred_logits"),
+        pred_logits=pred_logits,
         gt_labels=_unwrap_single_item(gt_labels),
         class_names=class_names,
         point_labels=config.point_labels,
@@ -646,14 +682,19 @@ def _log_camera_preview(
     """Log cameras and task overlays from raw, uncollated dataset metadata."""
     if raw_info is None:
         return
+    if "images" not in raw_info:
+        return
     images = raw_info.get("images")
-    if isinstance(images, dict) and images:
-        session.log_cameras(
-            images,
-            root_path=root_path,
-            point_layers=point_layers,
-            box_layers=box_layers,
-        )
+    if not isinstance(images, Mapping):
+        raise TypeError("Camera metadata 'images' must be a mapping")
+    if not images:
+        raise ValueError("Camera metadata 'images' must contain at least one camera")
+    session.log_cameras(
+        dict(images),
+        root_path=root_path,
+        point_layers=point_layers,
+        box_layers=box_layers,
+    )
 
 
 def _lidar_camera_layer(points: Any) -> dict[str, CameraPointProjection]:
@@ -794,12 +835,17 @@ def _log_multitask_preview(
     segmentation_labels = predictions.get("seg_pred_labels")
     if segmentation_labels is None:
         raise ValueError("Multi-task predictions are missing segmentation outputs.")
+    segmentation_logits = predictions.get("seg_pred_logits")
+    if segmentation_logits is None:
+        raise ValueError(
+            "Multi-task predictions must include 'seg_pred_logits' for pointwise entropy."
+        )
     segmentation_points = _get_segmentation_points(batch, segmentation_labels)
 
     session.log_segmentation3d(
         segmentation_points,
         segmentation_labels,
-        pred_logits=predictions.get("seg_pred_logits"),
+        pred_logits=segmentation_logits,
         gt_labels=(
             _unwrap_single_item(segmentation_ground_truth)
             if has_segmentation_ground_truth

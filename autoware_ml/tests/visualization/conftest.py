@@ -84,7 +84,9 @@ class PreviewDataset(Dataset):
 class PreviewDataModule(DataModule):
     """Wrap ``PreviewDataset`` with an explicit collation map."""
 
-    def __init__(self, samples: list[dict[str, Any]], collation_map: dict[str, str]) -> None:
+    def __init__(
+        self, samples: list[dict[str, Any]], collation_map: dict[str, str]
+    ) -> None:
         """Initialize the datamodule from samples and a collation map."""
         super().__init__(collation_map=collation_map)
         self.samples = samples
@@ -114,7 +116,9 @@ class PreviewModelBase(BaseModel):
 class CalibrationPreviewModel(PreviewModelBase):
     """Return fixed calibration-status probabilities."""
 
-    def predict_step(self, batch_inputs_dict: dict[str, Any], batch_idx: int) -> torch.Tensor:
+    def predict_step(
+        self, batch_inputs_dict: dict[str, Any], batch_idx: int
+    ) -> torch.Tensor:
         """Return one two-class probability row."""
         del batch_inputs_dict, batch_idx
         return torch.tensor([[0.1, 0.9]], dtype=torch.float32)
@@ -132,8 +136,14 @@ class SegmentationPreviewModel(PreviewModelBase):
         if isinstance(points, list):
             points = points[0]
         pred_labels = torch.arange(points.shape[0], dtype=torch.long) % 2
-        pred_probs = torch.nn.functional.one_hot(pred_labels, num_classes=2).float()
-        return {"pred_labels": pred_labels, "pred_probs": pred_probs}
+        pred_logits = (
+            torch.nn.functional.one_hot(pred_labels, num_classes=2).float() * 8.0
+        )
+        return {
+            "pred_labels": pred_labels,
+            "pred_probs": torch.softmax(pred_logits, dim=1),
+            "pred_logits": pred_logits,
+        }
 
 
 class VoxelizedSegmentationPreviewModel(PreviewModelBase):
@@ -145,9 +155,17 @@ class VoxelizedSegmentationPreviewModel(PreviewModelBase):
         """Return labels aligned with the original, pre-voxelization points."""
         del batch_idx
         inverse = batch_inputs_dict["inverse"].long()
-        pred_labels = torch.arange(inverse.shape[0], device=inverse.device, dtype=torch.long) % 2
-        pred_probs = torch.nn.functional.one_hot(pred_labels, num_classes=2).float()
-        return {"pred_labels": pred_labels, "pred_probs": pred_probs}
+        pred_labels = (
+            torch.arange(inverse.shape[0], device=inverse.device, dtype=torch.long) % 2
+        )
+        pred_logits = (
+            torch.nn.functional.one_hot(pred_labels, num_classes=2).float() * 8.0
+        )
+        return {
+            "pred_labels": pred_labels,
+            "pred_probs": torch.softmax(pred_logits, dim=1),
+            "pred_logits": pred_logits,
+        }
 
 
 class DetectionPreviewModel(PreviewModelBase):

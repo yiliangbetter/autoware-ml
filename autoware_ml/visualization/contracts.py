@@ -38,6 +38,26 @@ class VisualizationSessionConfig:
     point_color_mode: Literal["semantic", "intensity", "solid"] = "semantic"
     camera_frustums_visible: bool = False
 
+    def __post_init__(self) -> None:
+        """Reject invalid backend settings before any server is started."""
+        if self.backend not in {"rerun", "noop"}:
+            raise ValueError(f"Unknown visualization backend: {self.backend}")
+        for name, port in (("web_port", self.web_port), ("grpc_port", self.grpc_port)):
+            if not 1 <= port <= 65535:
+                raise ValueError(f"{name} must be between 1 and 65535")
+        if self.web_port == self.grpc_port:
+            raise ValueError("web_port and grpc_port must be different")
+        if not self.application_id.strip():
+            raise ValueError("application_id must not be empty")
+        if not self.timeline.strip():
+            raise ValueError("timeline must not be empty")
+        if not self.server_memory_limit.strip():
+            raise ValueError("server_memory_limit must not be empty")
+        if self.point_color_mode not in {"semantic", "intensity", "solid"}:
+            raise ValueError(
+                "point color mode must be 'semantic', 'intensity', or 'solid'"
+            )
+
 
 class VisualizationBackend(Protocol):
     """Interface implemented by visualization backends."""
