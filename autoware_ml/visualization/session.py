@@ -22,7 +22,11 @@ from typing import Any
 from autoware_ml.utils.calibration import CalibrationData
 from autoware_ml.visualization.backends import create_visualization_backend
 from autoware_ml.visualization.calibration_status import build_calibration_status_events
-from autoware_ml.visualization.cameras import build_camera_events
+from autoware_ml.visualization.cameras import (
+    CameraBoxProjection,
+    CameraPointProjection,
+    build_camera_events,
+)
 from autoware_ml.visualization.contracts import (
     VisualizationBackend,
     VisualizationSessionConfig,
@@ -199,9 +203,20 @@ class VisualizationSession:
         images: dict[str, Any],
         *,
         root_path: str = "scene/cameras",
+        point_layers: Mapping[str, CameraPointProjection] | None = None,
+        box_layers: Mapping[str, CameraBoxProjection] | None = None,
+        max_projected_points: int = 10_000,
     ) -> None:
-        """Log per-camera transforms, intrinsics, and images for one sample."""
-        self.backend.log_events(build_camera_events(images, root_path=root_path))
+        """Log camera images and persistent projected LiDAR/task overlays."""
+        self.backend.log_events(
+            build_camera_events(
+                images,
+                root_path=root_path,
+                point_layers=point_layers,
+                box_layers=box_layers,
+                max_projected_points=max_projected_points,
+            )
+        )
 
     def log_detection3d_data(
         self,

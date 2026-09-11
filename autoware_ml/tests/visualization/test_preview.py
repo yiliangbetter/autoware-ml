@@ -16,8 +16,10 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
+import cv2
 import numpy as np
 import pytest
 import torch
@@ -39,6 +41,7 @@ from autoware_ml.visualization.events import (
     Boxes3DEvent,
     ClearEvent,
     ImageEvent,
+    LineStrips2DEvent,
     PointCloud3DEvent,
     Points2DEvent,
     TextEvent,
@@ -99,7 +102,9 @@ _SEGMENTATION_COLLATION = {"points": "concat", "segment": "concat"}
 def _segmentation_sample() -> dict[str, Any]:
     """Build one segmentation sample with per-point ground truth."""
     return {
-        "points": np.array([[0.0, 0.0, 0.0, 1.0], [1.0, 0.0, 0.0, 1.0]], dtype=np.float32),
+        "points": np.array(
+            [[0.0, 0.0, 0.0, 1.0], [1.0, 0.0, 0.0, 1.0]], dtype=np.float32
+        ),
         "segment": np.array([0, 1], dtype=np.int64),
     }
 
@@ -107,7 +112,9 @@ def _segmentation_sample() -> dict[str, Any]:
 class _DecodedMultiPreviewModel(PreviewModelBase):
     """Return prediction-only joint outputs with pointwise logits."""
 
-    def predict_step(self, batch_inputs_dict: dict[str, Any], batch_idx: int) -> dict[str, Any]:
+    def predict_step(
+        self, batch_inputs_dict: dict[str, Any], batch_idx: int
+    ) -> dict[str, Any]:
         del batch_idx
         inverse = batch_inputs_dict["inverse"].long()
         labels = torch.arange(inverse.shape[0], device=inverse.device) % 2
@@ -159,7 +166,9 @@ class _IntermediatePreviewDataModule(PreviewDataModule):
         super().__init__([keyframe], collation_map)
         self.intermediate_frame = intermediate_frame
 
-    def _create_dataset(self, split: str, dataset_transforms: Any = None) -> PreviewDataset:
+    def _create_dataset(
+        self, split: str, dataset_transforms: Any = None
+    ) -> PreviewDataset:
         del split, dataset_transforms
         return _IntermediatePreviewDataset(self.samples, self.intermediate_frame)
 
@@ -195,8 +204,9 @@ def test_preview_logs_a_calibration_sample(
     assert visualized == 1
     assert preview_session.steps == [0]
     assert "calibration_status/camera/fused" in preview_session.paths_of(ImageEvent)
-    assert "calibration_status/camera/image/projected_points" in preview_session.paths_of(
-        Points2DEvent
+    assert (
+        "calibration_status/camera/image/projected_points"
+        in preview_session.paths_of(Points2DEvent)
     )
 
 
@@ -236,7 +246,8 @@ def test_preview_reconstructs_points_for_voxelized_segmentation(
     prediction = next(
         event
         for event in preview_session.events
-        if isinstance(event, PointCloud3DEvent) and event.path == "scene/prediction/segmentation"
+        if isinstance(event, PointCloud3DEvent)
+        and event.path == "scene/prediction/segmentation"
     )
     assert prediction.positions.shape == (3, 3)
 
@@ -268,7 +279,8 @@ def test_preview_reconstructs_intensity_for_voxelized_segmentation(
     intensity = next(
         event
         for event in preview_session.events
-        if isinstance(event, PointCloud3DEvent) and event.path == "scene/lidar/intensity"
+        if isinstance(event, PointCloud3DEvent)
+        and event.path == "scene/lidar/intensity"
     )
     assert intensity.colors is not None
     assert not np.array_equal(intensity.colors[0], intensity.colors[1])
@@ -280,7 +292,9 @@ def test_preview_recovers_ptv3_intensity_from_built_features(
     coordinates = np.array([[0.0, 0.0, 0.0], [1.0, 1.0, 1.0]], dtype=np.float32)
     sample = {
         "coord": coordinates,
-        "feat": np.concatenate((coordinates, np.array([[0.1], [0.9]], dtype=np.float32)), axis=1),
+        "feat": np.concatenate(
+            (coordinates, np.array([[0.1], [0.9]], dtype=np.float32)), axis=1
+        ),
         "inverse": np.array([0, 1, 0], dtype=np.int64),
         "origin_segment": np.array([0, 1, 0], dtype=np.int64),
     }
@@ -302,7 +316,8 @@ def test_preview_recovers_ptv3_intensity_from_built_features(
     intensity = next(
         event
         for event in preview_session.events
-        if isinstance(event, PointCloud3DEvent) and event.path == "scene/lidar/intensity"
+        if isinstance(event, PointCloud3DEvent)
+        and event.path == "scene/lidar/intensity"
     )
     assert intensity.colors is not None
     assert not np.array_equal(intensity.colors[0], intensity.colors[1])
@@ -399,7 +414,12 @@ def test_multitask_preview_runs_intermediate_frames_at_10hz_without_gt(
         "scene/ground_truth/detections",
         "scene/prediction/detections",
     ]
-    assert preview_session.paths_of(PointCloud3DEvent).count("scene/ground_truth/segmentation") == 1
+    assert (
+        preview_session.paths_of(PointCloud3DEvent).count(
+            "scene/ground_truth/segmentation"
+        )
+        == 1
+    )
 
 
 def test_preview_logs_transformed_voxelized_data_without_a_model(
@@ -430,8 +450,14 @@ def test_preview_logs_transformed_voxelized_data_without_a_model(
     )
 
     assert visualized == 1
-    assert "scene/ground_truth/segmentation" in preview_session.paths_of(PointCloud3DEvent)
-    logged = next(event for event in preview_session.events if isinstance(event, PointCloud3DEvent))
+    assert "scene/ground_truth/segmentation" in preview_session.paths_of(
+        PointCloud3DEvent
+    )
+    logged = next(
+        event
+        for event in preview_session.events
+        if isinstance(event, PointCloud3DEvent)
+    )
     assert logged.positions.shape == (3, 3)
 
 
@@ -457,6 +483,37 @@ def test_preview_logs_a_detection_sample(preview_session: RecordingBackend) -> N
     assert preview_session.paths_of(Boxes3DEvent) == [
         "scene/prediction/detections",
         "scene/ground_truth/detections",
+    ]
+
+
+def test_detection_preview_logs_persistent_multiview_camera_overlays(
+    preview_session: RecordingBackend,
+    tmp_path: Path,
+) -> None:
+    image_path = tmp_path / "front.png"
+    cv2.imwrite(str(image_path), np.zeros((36, 64, 3), dtype=np.uint8))
+    sample = _detection_sample()
+    sample["points"] = np.array([[0.0, 0.0, 10.0, 1.0]], dtype=np.float32)
+    sample["images"] = {
+        "CAM_FRONT": {
+            "img_path": str(image_path),
+            "cam2img": [[10.0, 0.0, 32.0], [0.0, 10.0, 18.0], [0.0, 0.0, 1.0]],
+            "lidar2cam": np.eye(4, dtype=np.float32),
+        }
+    }
+
+    run_visualization_preview(
+        DetectionPreviewModel(),
+        PreviewDataModule([sample], _DETECTION_COLLATION),
+        _NOOP_PREVIEW,
+    )
+
+    assert preview_session.paths_of(Points2DEvent) == [
+        "scene/cameras/CAM_FRONT/projected/lidar"
+    ]
+    assert preview_session.paths_of(LineStrips2DEvent) == [
+        "scene/cameras/CAM_FRONT/projected/prediction/detections",
+        "scene/cameras/CAM_FRONT/projected/ground_truth/detections",
     ]
 
 
@@ -511,7 +568,9 @@ def test_preview_names_detection_instances_without_collated_class_names(
     """Boxes and legend must read as names even when collation drops class names."""
     visualized = run_visualization_preview(
         None,
-        PreviewDataModule([_detection_sample()], _DETECTION_COLLATION_WITHOUT_CLASS_NAMES),
+        PreviewDataModule(
+            [_detection_sample()], _DETECTION_COLLATION_WITHOUT_CLASS_NAMES
+        ),
         VisualizationPreviewConfig(
             mode="data",
             split="test",
@@ -520,10 +579,14 @@ def test_preview_names_detection_instances_without_collated_class_names(
     )
 
     assert visualized == 1
-    boxes = next(event for event in preview_session.events if isinstance(event, Boxes3DEvent))
+    boxes = next(
+        event for event in preview_session.events if isinstance(event, Boxes3DEvent)
+    )
     assert boxes.labels == ["car"]
     legend = next(
-        event for event in preview_session.events if isinstance(event, AnnotationContextEvent)
+        event
+        for event in preview_session.events
+        if isinstance(event, AnnotationContextEvent)
     )
     assert [annotation.label for annotation in legend.annotations] == [
         "pedestrian",
@@ -545,7 +608,9 @@ def test_preview_logs_transformed_data_without_a_model(
     )
 
     assert visualized == 1
-    assert "scene/ground_truth/segmentation" in preview_session.paths_of(PointCloud3DEvent)
+    assert "scene/ground_truth/segmentation" in preview_session.paths_of(
+        PointCloud3DEvent
+    )
     assert "scene/meta/sample" in preview_session.paths_of(TextEvent)
 
 
@@ -646,7 +711,9 @@ def test_preview_reports_observed_keys_when_no_task_matches(
     preview_session: RecordingBackend,
 ) -> None:
     """An unroutable sample must name what it saw instead of guessing a task."""
-    with pytest.raises(ValueError, match=r"Could not infer a visualization task.*points"):
+    with pytest.raises(
+        ValueError, match=r"Could not infer a visualization task.*points"
+    ):
         run_visualization_preview(
             None,
             PreviewDataModule(
@@ -665,7 +732,9 @@ def test_preview_routes_a_sample_matching_two_tasks(
 ) -> None:
     """Multi-task samples are rendered through both task adapters."""
     sample = {
-        "points": np.array([[0.0, 0.0, 0.0, 1.0], [1.0, 0.0, 0.0, 1.0]], dtype=np.float32),
+        "points": np.array(
+            [[0.0, 0.0, 0.0, 1.0], [1.0, 0.0, 0.0, 1.0]], dtype=np.float32
+        ),
         "segment": np.array([0, 1], dtype=np.int64),
         "gt_boxes": np.array([[1.0, 2.0, 3.0, 4.0, 2.0, 1.5, 0.1]], dtype=np.float32),
         "gt_labels": np.array([1], dtype=np.int64),
@@ -690,7 +759,9 @@ def test_preview_routes_a_sample_matching_two_tasks(
     )
 
     assert visualized == 1
-    assert "scene/ground_truth/segmentation" in preview_session.paths_of(PointCloud3DEvent)
+    assert "scene/ground_truth/segmentation" in preview_session.paths_of(
+        PointCloud3DEvent
+    )
     assert "scene/ground_truth/detections" in preview_session.paths_of(Boxes3DEvent)
 
 

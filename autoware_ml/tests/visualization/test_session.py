@@ -23,12 +23,14 @@ import numpy as np
 
 from autoware_ml.tests.visualization.conftest import RecordingBackend
 from autoware_ml.utils.calibration import CalibrationData
+from autoware_ml.visualization.cameras import CameraPointProjection
 from autoware_ml.visualization.contracts import VisualizationSessionConfig
 from autoware_ml.visualization.events import (
     Boxes3DEvent,
     ClearEvent,
     ImageEvent,
     PointCloud3DEvent,
+    Points2DEvent,
     Transform3DEvent,
 )
 from autoware_ml.visualization.session import VisualizationSession
@@ -71,7 +73,9 @@ def test_session_begins_replacement_frame_and_forwards_timestamp(
 
 
 def test_session_from_config_builds_the_configured_backend() -> None:
-    session = VisualizationSession.from_config(VisualizationSessionConfig(backend="noop"))
+    session = VisualizationSession.from_config(
+        VisualizationSessionConfig(backend="noop")
+    )
 
     session.set_step(0)
     session.log_detection3d(_EMPTY_DETECTION)
@@ -119,7 +123,9 @@ def test_session_logs_segmentation_data(recording_backend: RecordingBackend) -> 
         class_names=["road", "car"],
     )
 
-    assert "scene/ground_truth/segmentation" in recording_backend.paths_of(PointCloud3DEvent)
+    assert "scene/ground_truth/segmentation" in recording_backend.paths_of(
+        PointCloud3DEvent
+    )
 
 
 def test_session_logs_calibration_status(
@@ -149,4 +155,31 @@ def test_session_logs_multiview_cameras(
     assert recording_backend.paths_of(ImageEvent) == [
         "scene/cameras/CAM_FRONT",
         "scene/cameras/CAM_BACK",
+    ]
+
+
+def test_session_logs_persistent_camera_projection_layers(
+    recording_backend: RecordingBackend, tmp_path: Path
+) -> None:
+    image_path = tmp_path / "cam.png"
+    cv2.imwrite(str(image_path), np.zeros((36, 64, 3), dtype=np.uint8))
+    camera = {
+        "img_path": str(image_path),
+        "cam2img": [[10.0, 0.0, 32.0], [0.0, 10.0, 18.0], [0.0, 0.0, 1.0]],
+        "lidar2cam": np.eye(4, dtype=np.float32),
+    }
+    session = VisualizationSession(recording_backend)
+
+    session.log_cameras(
+        {"CAM_FRONT": camera},
+        point_layers={
+            "prediction/segmentation": CameraPointProjection(
+                points=np.array([[0.0, 0.0, 10.0]], dtype=np.float32),
+                labels=np.array([0], dtype=np.int64),
+            )
+        },
+    )
+
+    assert recording_backend.paths_of(Points2DEvent) == [
+        "scene/cameras/CAM_FRONT/projected/prediction/segmentation"
     ]

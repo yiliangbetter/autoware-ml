@@ -31,7 +31,11 @@ from autoware_ml.datamodule.pipeline_context import PipelineContext
 from autoware_ml.models.base import BaseModel
 from autoware_ml.visualization.common import as_numpy
 from autoware_ml.visualization.contracts import VisualizationSessionConfig
-from autoware_ml.visualization.detection3d import DETECTION_PREDICTION_KEY_SETS
+from autoware_ml.visualization.cameras import CameraBoxProjection, CameraPointProjection
+from autoware_ml.visualization.detection3d import (
+    DETECTION_PREDICTION_KEY_SETS,
+    normalize_detection_predictions,
+)
 from autoware_ml.visualization.session import VisualizationSession
 
 #: Per-point ground-truth label keys, most detailed first. Shared by the task
@@ -61,7 +65,9 @@ class VisualizationPreviewConfig:
     class_names: tuple[str, ...] | None = None
     segmentation_class_names: tuple[str, ...] | None = None
     detection_class_names: tuple[str, ...] | None = None
-    session: VisualizationSessionConfig = field(default_factory=VisualizationSessionConfig)
+    session: VisualizationSessionConfig = field(
+        default_factory=VisualizationSessionConfig
+    )
     point_color_mode: Literal["semantic", "intensity", "solid"] = "semantic"
 
 
@@ -88,7 +94,9 @@ def run_visualization_preview(
 
     mode = _resolve_preview_mode(config.mode, model)
     if mode == "predictions" and model is None:
-        raise ValueError("Model must be provided when visualization mode is 'predictions'.")
+        raise ValueError(
+            "Model must be provided when visualization mode is 'predictions'."
+        )
 
     device = resolve_preview_device(config.device)
     preview_dataloader, preview_indices = _build_preview_dataloader(
@@ -106,13 +114,19 @@ def run_visualization_preview(
 
     dataset = getattr(datamodule, f"{config.split}_dataset")
     intermediate_provider = getattr(dataset, "get_intermediate_prediction_infos", None)
-    use_intermediate_predictions = mode == "predictions" and callable(intermediate_provider)
+    use_intermediate_predictions = mode == "predictions" and callable(
+        intermediate_provider
+    )
     timeline_stride = max(1, int(round(config.prediction_frequency_hz)))
     with torch.no_grad():
-        for dataset_index, batch in zip(preview_indices, preview_dataloader, strict=True):
+        for dataset_index, batch in zip(
+            preview_indices, preview_dataloader, strict=True
+        ):
             raw_info = dataset.get_data_info(dataset_index)
             keyframe_step = (
-                dataset_index * timeline_stride if use_intermediate_predictions else dataset_index
+                dataset_index * timeline_stride
+                if use_intermediate_predictions
+                else dataset_index
             )
             _run_preview_frame(
                 session=session,
@@ -135,9 +149,14 @@ def run_visualization_preview(
                 config.prediction_frequency_hz,
             )
             keyframe_timestamp = _get_sample_timestamp(raw_info)
-            for fallback_offset, intermediate_info in enumerate(intermediate_infos, start=1):
+            for fallback_offset, intermediate_info in enumerate(
+                intermediate_infos, start=1
+            ):
                 intermediate_timestamp = _get_sample_timestamp(intermediate_info)
-                if keyframe_timestamp is not None and intermediate_timestamp is not None:
+                if (
+                    keyframe_timestamp is not None
+                    and intermediate_timestamp is not None
+                ):
                     step_offset = max(
                         1,
                         int(
@@ -195,7 +214,11 @@ def _run_preview_frame(
         if mode == "predictions" and model is not None
         else None
     )
-    if mode == "predictions" and model is not None and _is_raw_multitask_outputs(predictions):
+    if (
+        mode == "predictions"
+        and model is not None
+        and _is_raw_multitask_outputs(predictions)
+    ):
         build_eval_output = getattr(model, "build_eval_output", None)
         if build_eval_output is None:
             raise ValueError(
@@ -205,7 +228,9 @@ def _run_preview_frame(
         predictions = build_eval_output(batch, predictions)
 
     session.begin_frame(timeline_step, timestamp=_get_sample_timestamp(raw_info))
-    _log_preview_sample(session, batch, predictions, dataset_index, mode, config, raw_info)
+    _log_preview_sample(
+        session, batch, predictions, dataset_index, mode, config, raw_info
+    )
 
 
 def _build_prediction_batch(
@@ -256,7 +281,9 @@ def _build_preview_dataloader(
             f"with {len(dataset)} samples."
         )
 
-    preview_indices = list(range(sample_index, min(len(dataset), sample_index + max_samples)))
+    preview_indices = list(
+        range(sample_index, min(len(dataset), sample_index + max_samples))
+    )
     subset = Subset(dataset, preview_indices)
     return (
         DataLoader(
@@ -304,9 +331,13 @@ def _log_preview_sample(
         return
     if task == "segmentation3d":
         if mode == "data":
-            _log_segmentation_data_preview(session, batch, sample_name, config, raw_info)
+            _log_segmentation_data_preview(
+                session, batch, sample_name, config, raw_info
+            )
             return
-        _log_segmentation_preview(session, batch, predictions, sample_name, config, raw_info)
+        _log_segmentation_preview(
+            session, batch, predictions, sample_name, config, raw_info
+        )
         return
     if task == "detection3d":
         if mode == "data":
@@ -314,11 +345,17 @@ def _log_preview_sample(
             return
         detection_predictions = _extract_single_detection_prediction(predictions)
         if detection_predictions is None:
-            raise ValueError("Could not normalize detection predictions for visualization.")
-        _log_detection_preview(session, batch, detection_predictions, sample_name, config, raw_info)
+            raise ValueError(
+                "Could not normalize detection predictions for visualization."
+            )
+        _log_detection_preview(
+            session, batch, detection_predictions, sample_name, config, raw_info
+        )
         return
     if task == "multi":
-        _log_multitask_preview(session, batch, predictions, sample_name, config, raw_info, mode)
+        _log_multitask_preview(
+            session, batch, predictions, sample_name, config, raw_info, mode
+        )
         return
 
     raise ValueError(f"Unsupported visualization task: {task}")
@@ -495,17 +532,29 @@ def _log_segmentation_data_preview(
 ) -> None:
     """Render one transformed segmentation sample without predictions."""
     gt_labels = _get_segmentation_gt_labels(batch)
+    points = _get_segmentation_points(batch, gt_labels)
+    class_names = _resolve_class_names(config, batch, raw_info, task="segmentation3d")
     session.log_segmentation3d_data(
-        _get_segmentation_points(batch, gt_labels),
+        points,
         _unwrap_single_item(gt_labels),
-        class_names=_resolve_class_names(config, batch, raw_info, task="segmentation3d"),
+        class_names=class_names,
         point_labels=config.point_labels,
         sample_name=sample_name,
         point_color_mode=config.point_color_mode,
         root_path="scene",
     )
     if log_cameras:
-        _log_camera_preview(session, raw_info)
+        _log_camera_preview(
+            session,
+            raw_info,
+            point_layers={
+                "ground_truth/segmentation": CameraPointProjection(
+                    points=points,
+                    labels=_unwrap_single_item(gt_labels),
+                    class_names=class_names,
+                )
+            },
+        )
 
 
 def _log_detection_data_preview(
@@ -518,17 +567,32 @@ def _log_detection_data_preview(
     log_cameras: bool = True,
 ) -> None:
     """Render one transformed detection sample without predictions."""
+    points = _unwrap_single_item(batch.get("points"))
+    gt_boxes = _unwrap_single_item(batch.get("gt_boxes"))
+    gt_labels = _unwrap_single_item(batch.get("gt_labels"))
+    class_names = _resolve_class_names(config, batch, raw_info, task="detection3d")
     session.log_detection3d_data(
-        points=_unwrap_single_item(batch.get("points")),
-        gt_boxes=_unwrap_single_item(batch.get("gt_boxes")),
-        gt_labels=_unwrap_single_item(batch.get("gt_labels")),
-        class_names=_resolve_class_names(config, batch, raw_info, task="detection3d"),
+        points=points,
+        gt_boxes=gt_boxes,
+        gt_labels=gt_labels,
+        class_names=class_names,
         sample_name=sample_name,
         point_color_mode=config.point_color_mode,
         root_path="scene",
     )
     if log_cameras:
-        _log_camera_preview(session, raw_info)
+        _log_camera_preview(
+            session,
+            raw_info,
+            point_layers=_lidar_camera_layer(points),
+            box_layers={
+                "ground_truth/detections": CameraBoxProjection(
+                    boxes=gt_boxes,
+                    labels=gt_labels,
+                    class_names=class_names,
+                )
+            },
+        )
 
 
 def _log_segmentation_preview(
@@ -542,31 +606,61 @@ def _log_segmentation_preview(
     """Render one 3D segmentation preview sample."""
     gt_labels = _get_segmentation_gt_labels(batch)
     pred_labels = predictions["pred_labels"]
+    points = _get_segmentation_points(batch, pred_labels)
+    class_names = _resolve_class_names(config, batch, raw_info, task="segmentation3d")
     session.log_segmentation3d(
-        _get_segmentation_points(batch, pred_labels),
+        points,
         pred_labels,
         pred_probs=predictions.get("pred_probs"),
         pred_logits=predictions.get("pred_logits"),
         gt_labels=_unwrap_single_item(gt_labels),
-        class_names=_resolve_class_names(config, batch, raw_info, task="segmentation3d"),
+        class_names=class_names,
         point_labels=config.point_labels,
         sample_name=sample_name,
         point_color_mode=config.point_color_mode,
     )
-    _log_camera_preview(session, raw_info)
+    point_layers = {
+        "prediction/segmentation": CameraPointProjection(
+            points=points,
+            labels=pred_labels,
+            class_names=class_names,
+        )
+    }
+    if gt_labels is not None:
+        point_layers["ground_truth/segmentation"] = CameraPointProjection(
+            points=points,
+            labels=_unwrap_single_item(gt_labels),
+            class_names=class_names,
+        )
+    _log_camera_preview(session, raw_info, point_layers=point_layers)
 
 
 def _log_camera_preview(
     session: VisualizationSession,
     raw_info: dict[str, Any] | None,
     root_path: str = "scene/cameras",
+    *,
+    point_layers: dict[str, CameraPointProjection] | None = None,
+    box_layers: dict[str, CameraBoxProjection] | None = None,
 ) -> None:
-    """Log cameras for a sample using raw dataset info (bypasses collation)."""
+    """Log cameras and task overlays from raw, uncollated dataset metadata."""
     if raw_info is None:
         return
     images = raw_info.get("images")
     if isinstance(images, dict) and images:
-        session.log_cameras(images, root_path=root_path)
+        session.log_cameras(
+            images,
+            root_path=root_path,
+            point_layers=point_layers,
+            box_layers=box_layers,
+        )
+
+
+def _lidar_camera_layer(points: Any) -> dict[str, CameraPointProjection]:
+    """Return a depth-colored camera layer when LiDAR points are available."""
+    if points is None:
+        return {}
+    return {"lidar": CameraPointProjection(points=points)}
 
 
 def _log_detection_preview(
@@ -578,16 +672,39 @@ def _log_detection_preview(
     raw_info: dict[str, Any] | None = None,
 ) -> None:
     """Render one 3D detection preview sample."""
+    points = _unwrap_single_item(batch.get("points"))
+    gt_boxes = _unwrap_single_item(batch.get("gt_boxes"))
+    gt_labels = _unwrap_single_item(batch.get("gt_labels"))
+    class_names = _resolve_class_names(config, batch, raw_info, task="detection3d")
+    normalized_predictions = normalize_detection_predictions(predictions)
     session.log_detection3d(
         predictions,
-        points=_unwrap_single_item(batch.get("points")),
-        gt_boxes=_unwrap_single_item(batch.get("gt_boxes")),
-        gt_labels=_unwrap_single_item(batch.get("gt_labels")),
-        class_names=_resolve_class_names(config, batch, raw_info, task="detection3d"),
+        points=points,
+        gt_boxes=gt_boxes,
+        gt_labels=gt_labels,
+        class_names=class_names,
         sample_name=sample_name,
         point_color_mode=config.point_color_mode,
     )
-    _log_camera_preview(session, raw_info)
+    box_layers = {
+        "prediction/detections": CameraBoxProjection(
+            boxes=normalized_predictions["boxes"],
+            labels=normalized_predictions["labels"],
+            class_names=class_names,
+        )
+    }
+    if gt_boxes is not None and gt_labels is not None:
+        box_layers["ground_truth/detections"] = CameraBoxProjection(
+            boxes=gt_boxes,
+            labels=gt_labels,
+            class_names=class_names,
+        )
+    _log_camera_preview(
+        session,
+        raw_info,
+        point_layers=_lidar_camera_layer(points),
+        box_layers=box_layers,
+    )
 
 
 def _log_multitask_preview(
@@ -600,8 +717,12 @@ def _log_multitask_preview(
     mode: PreviewMode,
 ) -> None:
     """Render both branches of a combined detection/segmentation sample."""
-    segmentation_class_names = _resolve_class_names(config, batch, raw_info, task="segmentation3d")
-    detection_class_names = _resolve_class_names(config, batch, raw_info, task="detection3d")
+    segmentation_class_names = _resolve_class_names(
+        config, batch, raw_info, task="segmentation3d"
+    )
+    detection_class_names = _resolve_class_names(
+        config, batch, raw_info, task="detection3d"
+    )
     segmentation_ground_truth = _get_segmentation_gt_labels(batch)
     has_segmentation_ground_truth = _has_ground_truth(
         raw_info,
@@ -634,13 +755,42 @@ def _log_multitask_preview(
                 raw_info,
                 log_cameras=False,
             )
-        _log_camera_preview(session, raw_info)
+        point_layers: dict[str, CameraPointProjection] = {}
+        box_layers: dict[str, CameraBoxProjection] = {}
+        if has_segmentation_ground_truth:
+            gt_points = _get_segmentation_points(batch, segmentation_ground_truth)
+            point_layers["ground_truth/segmentation"] = CameraPointProjection(
+                points=gt_points,
+                labels=_unwrap_single_item(segmentation_ground_truth),
+                class_names=segmentation_class_names,
+            )
+        else:
+            point_layers.update(
+                _lidar_camera_layer(_unwrap_single_item(batch.get("points")))
+            )
+        if has_detection_ground_truth:
+            box_layers["ground_truth/detections"] = CameraBoxProjection(
+                boxes=detection_ground_truth_boxes,
+                labels=detection_ground_truth_labels,
+                class_names=detection_class_names,
+            )
+        _log_camera_preview(
+            session,
+            raw_info,
+            point_layers=point_layers,
+            box_layers=box_layers,
+        )
         return
     if not isinstance(predictions, dict):
         raise TypeError("Multi-task predictions must be a decoded dictionary.")
     detection_predictions = predictions.get("predictions")
-    if not isinstance(detection_predictions, (list, tuple)) or len(detection_predictions) != 1:
-        raise ValueError("Multi-task detection predictions must contain exactly one sample.")
+    if (
+        not isinstance(detection_predictions, (list, tuple))
+        or len(detection_predictions) != 1
+    ):
+        raise ValueError(
+            "Multi-task detection predictions must contain exactly one sample."
+        )
     segmentation_labels = predictions.get("seg_pred_labels")
     if segmentation_labels is None:
         raise ValueError("Multi-task predictions are missing segmentation outputs.")
@@ -665,13 +815,47 @@ def _log_multitask_preview(
         detection_predictions[0],
         points=_unwrap_single_item(batch.get("points")),
         gt_boxes=(detection_ground_truth_boxes if has_detection_ground_truth else None),
-        gt_labels=(detection_ground_truth_labels if has_detection_ground_truth else None),
+        gt_labels=(
+            detection_ground_truth_labels if has_detection_ground_truth else None
+        ),
         class_names=detection_class_names,
         sample_name=sample_name,
         point_color_mode=config.point_color_mode,
         root_path="scene",
     )
-    _log_camera_preview(session, raw_info)
+    normalized_predictions = normalize_detection_predictions(detection_predictions[0])
+    point_layers = {
+        "prediction/segmentation": CameraPointProjection(
+            points=segmentation_points,
+            labels=segmentation_labels,
+            class_names=segmentation_class_names,
+        )
+    }
+    if has_segmentation_ground_truth:
+        point_layers["ground_truth/segmentation"] = CameraPointProjection(
+            points=segmentation_points,
+            labels=_unwrap_single_item(segmentation_ground_truth),
+            class_names=segmentation_class_names,
+        )
+    box_layers = {
+        "prediction/detections": CameraBoxProjection(
+            boxes=normalized_predictions["boxes"],
+            labels=normalized_predictions["labels"],
+            class_names=detection_class_names,
+        )
+    }
+    if has_detection_ground_truth:
+        box_layers["ground_truth/detections"] = CameraBoxProjection(
+            boxes=detection_ground_truth_boxes,
+            labels=detection_ground_truth_labels,
+            class_names=detection_class_names,
+        )
+    _log_camera_preview(
+        session,
+        raw_info,
+        point_layers=point_layers,
+        box_layers=box_layers,
+    )
 
 
 def _extract_single_detection_prediction(predictions: Any) -> dict[str, Any] | None:
@@ -724,7 +908,11 @@ def _get_segmentation_points(batch: dict[str, Any], labels: Any) -> Any:
 
     coord = _unwrap_single_item(batch.get("coord"))
     inverse = _unwrap_single_item(batch.get("inverse"))
-    if coord is not None and inverse is not None and _first_dimension(inverse) == point_count:
+    if (
+        coord is not None
+        and inverse is not None
+        and _first_dimension(inverse) == point_count
+    ):
         if isinstance(inverse, torch.Tensor):
             positions = coord[inverse.long()]
         else:
@@ -739,7 +927,9 @@ def _get_segmentation_points(batch: dict[str, Any], labels: Any) -> Any:
     if coord is not None and _first_dimension(coord) == point_count:
         return _append_aligned_intensity(coord, batch, point_count)
 
-    raise KeyError("Segmentation visualization requires 'points' or 'coord' aligned with labels.")
+    raise KeyError(
+        "Segmentation visualization requires 'points' or 'coord' aligned with labels."
+    )
 
 
 def _append_aligned_intensity(
