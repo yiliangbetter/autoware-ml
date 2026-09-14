@@ -79,13 +79,19 @@ def test_scene_layout_includes_semantic_camera_and_statistics_views() -> None:
     assert "3D IoU quality" in serialized
     assert "Detection matches" in serialized
     assert blueprint.blueprint_panel_expanded is True
+    assert [child.name for child in blueprint.layout.children] == [
+        "Semantic comparison",
+        "Intensity comparison",
+        "Uncertainty",
+        "Cameras",
+    ]
 
     semantic_layout = blueprint.layout.children[0]
     assert isinstance(semantic_layout, LayoutGroup)
     camera_switch = semantic_layout.children[0]
     assert isinstance(camera_switch, LayoutGroup)
     assert camera_switch.kind == "tabs"
-    assert camera_switch.name == "Camera projections"
+    assert camera_switch.name == "Semantic comparison"
     assert camera_switch.active == 0
     assert [child.name for child in camera_switch.children] == [
         "Camera projections OFF",
@@ -112,6 +118,7 @@ def test_scene_layout_camera_switch_respects_visible_initial_state() -> None:
     camera_switch = blueprint.layout.children[0]
     assert isinstance(camera_switch, LayoutGroup)
     assert camera_switch.kind == "tabs"
+    assert camera_switch.name == "Semantic comparison"
     assert camera_switch.active == 1
 
 
