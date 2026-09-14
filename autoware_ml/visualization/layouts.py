@@ -243,7 +243,7 @@ def _comparison_tab(
                 scene_comparison(False, layout_name="Camera projections OFF"),
                 scene_comparison(True, layout_name="Camera projections ON"),
             ),
-            name="Camera projections",
+            name=f"{name} comparison",
             active=int(camera_frustums_visible),
         )
     else:
@@ -374,7 +374,7 @@ def _uncertainty_tab(
             comparison(False, layout_name="Camera projections OFF"),
             comparison(True, layout_name="Camera projections ON"),
         ),
-        name="Camera projections",
+        name="Uncertainty",
         active=int(camera_frustums_visible),
     )
 
