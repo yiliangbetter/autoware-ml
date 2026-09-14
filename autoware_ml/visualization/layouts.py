@@ -108,7 +108,7 @@ def _scene_view(
             ViewOverride(path="/scene/cameras", visible=camera_frustums_visible)
         )
     if detection_path is not None and detection_path.startswith("scene/prediction/"):
-        overrides.append(ViewOverride(path=f"/{detection_path}", show_labels=False))
+        overrides.append(ViewOverride(path=f"/{detection_path}", show_labels=True))
     return ViewSpec(
         kind="spatial3d",
         name=name,
@@ -190,40 +190,67 @@ def _comparison_tab(
     timeline: str,
 ) -> LayoutGroup:
     """Build side-by-side GT and prediction scenes plus IoU plots."""
-    scene_views = []
-    if any(
-        path in observed_paths
-        for path in ("scene/ground_truth/segmentation", "scene/ground_truth/detections")
-    ):
-        scene_views.append(
-            _scene_view(
-                observed_paths,
-                camera_paths,
-                name=f"GT · {name}",
-                point_path=ground_truth_points,
-                detection_path="scene/ground_truth/detections",
-                camera_frustums_visible=camera_frustums_visible,
+    def scene_comparison(
+        camera_visible: bool,
+        *,
+        layout_name: str,
+    ) -> LayoutGroup:
+        scene_views = []
+        if any(
+            path in observed_paths
+            for path in (
+                "scene/ground_truth/segmentation",
+                "scene/ground_truth/detections",
             )
-        )
-    if any(
-        path in observed_paths
-        for path in ("scene/prediction/segmentation", "scene/prediction/detections")
-    ):
-        scene_views.append(
-            _scene_view(
-                observed_paths,
-                camera_paths,
-                name=f"Prediction · {name}",
-                point_path=prediction_points,
-                detection_path="scene/prediction/detections",
-                camera_frustums_visible=camera_frustums_visible,
+        ):
+            scene_views.append(
+                _scene_view(
+                    observed_paths,
+                    camera_paths,
+                    name=f"GT · {name}",
+                    point_path=ground_truth_points,
+                    detection_path="scene/ground_truth/detections",
+                    camera_frustums_visible=camera_visible,
+                )
             )
+        if any(
+            path in observed_paths
+            for path in (
+                "scene/prediction/segmentation",
+                "scene/prediction/detections",
+            )
+        ):
+            scene_views.append(
+                _scene_view(
+                    observed_paths,
+                    camera_paths,
+                    name=f"Prediction · {name}",
+                    point_path=prediction_points,
+                    detection_path="scene/prediction/detections",
+                    camera_frustums_visible=camera_visible,
+                )
+            )
+        return LayoutGroup(
+            kind="horizontal",
+            children=tuple(scene_views),
+            name=layout_name,
         )
-    comparison = LayoutGroup(
-        kind="horizontal",
-        children=tuple(scene_views),
-        name=f"{name} comparison",
-    )
+
+    if camera_paths:
+        comparison = LayoutGroup(
+            kind="tabs",
+            children=(
+                scene_comparison(False, layout_name="Camera projections OFF"),
+                scene_comparison(True, layout_name="Camera projections ON"),
+            ),
+            name="Camera projections",
+            active=int(camera_frustums_visible),
+        )
+    else:
+        comparison = scene_comparison(
+            camera_frustums_visible,
+            layout_name=f"{name} comparison",
+        )
     statistics = _detection_statistics_views(observed_paths, timeline)
     if not statistics:
         return comparison
@@ -304,6 +331,54 @@ def _camera_tab(observed_paths: set[str], camera_paths: Sequence[str]) -> Layout
     return LayoutGroup(kind="tabs", children=tuple(camera_tabs), name="Cameras")
 
 
+def _uncertainty_tab(
+    observed_paths: set[str],
+    camera_paths: Sequence[str],
+    *,
+    camera_frustums_visible: bool,
+) -> LayoutGroup:
+    """Build entropy/semantic views with a visible camera projection switch."""
+
+    def comparison(camera_visible: bool, *, layout_name: str) -> LayoutGroup:
+        return LayoutGroup(
+            kind="horizontal",
+            children=(
+                _scene_view(
+                    observed_paths,
+                    camera_paths,
+                    name="Prediction · Entropy",
+                    point_path="scene/prediction/entropy",
+                    detection_path="scene/prediction/detections",
+                    camera_frustums_visible=camera_visible,
+                ),
+                _scene_view(
+                    observed_paths,
+                    camera_paths,
+                    name="Prediction · Semantic",
+                    point_path="scene/prediction/segmentation",
+                    detection_path="scene/prediction/detections",
+                    camera_frustums_visible=camera_visible,
+                ),
+            ),
+            name=layout_name,
+        )
+
+    if not camera_paths:
+        return comparison(
+            camera_frustums_visible,
+            layout_name="Uncertainty",
+        )
+    return LayoutGroup(
+        kind="tabs",
+        children=(
+            comparison(False, layout_name="Camera projections OFF"),
+            comparison(True, layout_name="Camera projections ON"),
+        ),
+        name="Camera projections",
+        active=int(camera_frustums_visible),
+    )
+
+
 def build_scene_blueprint(
     observed_paths: Iterable[str],
     camera_paths: Iterable[str],
@@ -380,27 +455,10 @@ def build_scene_blueprint(
         tabs.append(
             (
                 "Uncertainty",
-                LayoutGroup(
-                    kind="horizontal",
-                    children=(
-                        _scene_view(
-                            paths,
-                            cameras,
-                            name="Prediction · Entropy",
-                            point_path="scene/prediction/entropy",
-                            detection_path="scene/prediction/detections",
-                            camera_frustums_visible=camera_frustums_visible,
-                        ),
-                        _scene_view(
-                            paths,
-                            cameras,
-                            name="Prediction · Semantic",
-                            point_path="scene/prediction/segmentation",
-                            detection_path="scene/prediction/detections",
-                            camera_frustums_visible=camera_frustums_visible,
-                        ),
-                    ),
-                    name="Uncertainty",
+                _uncertainty_tab(
+                    paths,
+                    cameras,
+                    camera_frustums_visible=camera_frustums_visible,
                 ),
             )
         )

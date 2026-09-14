@@ -533,9 +533,15 @@ def test_backend_builds_named_comparison_views_without_root_origins(
         in serialized
     )
     assert (
-        "'/scene/prediction/detections': ('Boxes3D', {'show_labels': False})"
+        "'/scene/cameras': {'kind': 'EntityBehavior', 'args': (), 'visible': True}"
         in serialized
     )
+    assert (
+        "'/scene/prediction/detections': ('Boxes3D', {'show_labels': True})"
+        in serialized
+    )
+    assert "Camera projections OFF" in serialized
+    assert "Camera projections ON" in serialized
     assert "'origin': '/'" not in serialized
     assert "'auto_views': False" in serialized
     assert "'kind': 'TimePanel', 'args': (), 'expanded': False" in serialized
@@ -597,6 +603,7 @@ def test_backend_can_show_camera_geometry_initially(
 
     blueprint, _ = rerun_calls["blueprints"][-1]
     serialized = repr(blueprint)
+    assert "'active_tab': 1" in serialized
     assert (
         "'/scene/cameras': {'kind': 'EntityBehavior', 'args': (), 'visible': True}"
         in serialized

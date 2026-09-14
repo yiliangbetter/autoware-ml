@@ -214,18 +214,17 @@ The backend JPEG-encodes RGB camera frames at quality 95 and broadcasts constant
 point radii instead of repeating them per point. These transport optimizations
 preserve scene geometry and calibration while keeping 10 Hz recordings usable
 over an SSH tunnel.
-Prediction box labels remain recorded but start hidden in 3D comparisons, since
-raw decoded outputs can contain hundreds of proposals whose floating labels
-would obscure the point cloud. Select the prediction detection entity and use
-Rerun's **Show labels** property to reveal them dynamically when needed.
-Camera geometry starts hidden to keep the GT/PD point-cloud comparisons clear.
-When calibrated cameras are present, the Blueprint panel starts expanded and
-shows Rerun's eye control beside the `cameras` subtree in each 3D view. This
-control behaves like a checkbox and immediately shows or hides the complete
-camera subtree, including both frustums and projected image planes, without
-restarting inference. The `--camera-frustums`/`--no-camera-frustums` CLI pair
-only controls the initial checkbox state. Pure LiDAR previews keep the panel
-collapsed because they have no camera control to expose.
+Prediction box labels are visible by default and contain the class name and
+confidence score. They can still be hidden dynamically with Rerun's **Show
+labels** property when a dense set of proposals obscures the point cloud.
+When calibrated cameras are present, every 3D comparison contains a prominent
+**Camera projections OFF** / **Camera projections ON** tab switch. Switching
+tabs immediately hides or shows the complete camera subtree, including both
+frustums and projected image planes, without restarting inference. Rerun's eye
+control beside the `cameras` subtree remains available for per-view adjustment.
+The `--camera-frustums`/`--no-camera-frustums` CLI pair chooses the initially
+active switch position. Pure LiDAR previews do not show the switch and keep the
+Blueprint panel collapsed.
 Every explicit 3D view uses `scene` as its origin. Automatic views are disabled,
 and the Selection and Time panels start collapsed, so a root `/` text view or
 stream is not shown in the working layout. The Time panel can be expanded when

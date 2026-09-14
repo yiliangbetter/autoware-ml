@@ -80,6 +80,40 @@ def test_scene_layout_includes_semantic_camera_and_statistics_views() -> None:
     assert "Detection matches" in serialized
     assert blueprint.blueprint_panel_expanded is True
 
+    semantic_layout = blueprint.layout.children[0]
+    assert isinstance(semantic_layout, LayoutGroup)
+    camera_switch = semantic_layout.children[0]
+    assert isinstance(camera_switch, LayoutGroup)
+    assert camera_switch.kind == "tabs"
+    assert camera_switch.name == "Camera projections"
+    assert camera_switch.active == 0
+    assert [child.name for child in camera_switch.children] == [
+        "Camera projections OFF",
+        "Camera projections ON",
+    ]
+    assert "show_labels=True" in serialized
+
+
+def test_scene_layout_camera_switch_respects_visible_initial_state() -> None:
+    blueprint = build_scene_blueprint(
+        {
+            "scene/prediction/segmentation",
+            "scene/prediction/detections",
+            "scene/cameras/front",
+        },
+        ["scene/cameras/front"],
+        point_color_mode="semantic",
+        camera_frustums_visible=True,
+        timeline="frame",
+    )
+
+    assert blueprint is not None
+    assert isinstance(blueprint.layout, LayoutGroup)
+    camera_switch = blueprint.layout.children[0]
+    assert isinstance(camera_switch, LayoutGroup)
+    assert camera_switch.kind == "tabs"
+    assert camera_switch.active == 1
+
 
 def test_unknown_scene_adapter_gets_a_generic_view() -> None:
     blueprint = build_scene_blueprint(
