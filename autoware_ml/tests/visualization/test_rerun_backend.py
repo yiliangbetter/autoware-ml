@@ -93,12 +93,7 @@ class _FakeAnnotationContext:
         payload: Any = (
             [[]]
             if type(self).serializes_empty
-            else [
-                [
-                    {"class_id": info["id"], "label": info["label"]}
-                    for info in self.context
-                ]
-            ]
+            else [[{"class_id": info["id"], "label": info["label"]} for info in self.context]]
         )
         return [
             _FakeComponentBatch("rerun.components.AnnotationContextIndicator", [None]),
@@ -240,21 +235,15 @@ def _build_fake_rerun(calls: dict[str, Any]) -> Any:
             return _FakeImage(image)
 
         @staticmethod
-        def Points3D(
-            *args: Any, **kwargs: Any
-        ) -> tuple[str, tuple[Any, ...], dict[str, Any]]:
+        def Points3D(*args: Any, **kwargs: Any) -> tuple[str, tuple[Any, ...], dict[str, Any]]:
             return ("Points3D", args, kwargs)
 
         @staticmethod
-        def Points2D(
-            *args: Any, **kwargs: Any
-        ) -> tuple[str, tuple[Any, ...], dict[str, Any]]:
+        def Points2D(*args: Any, **kwargs: Any) -> tuple[str, tuple[Any, ...], dict[str, Any]]:
             return ("Points2D", args, kwargs)
 
         @staticmethod
-        def LineStrips2D(
-            *args: Any, **kwargs: Any
-        ) -> tuple[str, tuple[Any, ...], dict[str, Any]]:
+        def LineStrips2D(*args: Any, **kwargs: Any) -> tuple[str, tuple[Any, ...], dict[str, Any]]:
             return ("LineStrips2D", args, kwargs)
 
         @staticmethod
@@ -377,13 +366,9 @@ def test_backend_uses_the_supported_scalars_api(
     backend: RerunVisualizationBackend, rerun_calls: dict[str, Any]
 ) -> None:
     """``rr.Scalar`` is deprecated since rerun 0.23, so ``rr.Scalars`` must be used."""
-    backend.log_event(
-        ScalarEvent(path="scene/metrics/detection/num_predictions", value=4.0)
-    )
+    backend.log_event(ScalarEvent(path="scene/metrics/detection/num_predictions", value=4.0))
 
-    assert _logged(rerun_calls, "scene/metrics/detection/num_predictions") == [
-        ("Scalars", 4.0)
-    ]
+    assert _logged(rerun_calls, "scene/metrics/detection/num_predictions") == [("Scalars", 4.0)]
 
 
 def test_backend_translates_every_supported_event(
@@ -529,27 +514,17 @@ def test_backend_builds_named_comparison_views_without_root_origins(
     assert "Frame max IoU" in serialized
     assert "Matched mean IoU (>=0.5)" in serialized
     assert (
-        "'/scene/cameras': {'kind': 'EntityBehavior', 'args': (), 'visible': False}"
-        in serialized
+        "'/scene/cameras': {'kind': 'EntityBehavior', 'args': (), 'visible': False}" in serialized
     )
-    assert (
-        "'/scene/cameras': {'kind': 'EntityBehavior', 'args': (), 'visible': True}"
-        in serialized
-    )
-    assert (
-        "'/scene/prediction/detections': ('Boxes3D', {'show_labels': True})"
-        in serialized
-    )
+    assert "'/scene/cameras': {'kind': 'EntityBehavior', 'args': (), 'visible': True}" in serialized
+    assert "'/scene/prediction/detections': ('Boxes3D', {'show_labels': True})" in serialized
     assert "Camera projections OFF" in serialized
     assert "Camera projections ON" in serialized
     assert "'origin': '/'" not in serialized
     assert "'auto_views': False" in serialized
     assert "'kind': 'TimePanel', 'args': (), 'expanded': False" in serialized
     assert "'kind': 'BlueprintPanel', 'args': (), 'expanded': True" in serialized
-    assert (
-        "'kind': 'VisualizerOverrides', 'args': (['SeriesLines', 'SeriesPoints'],)"
-        in serialized
-    )
+    assert "'kind': 'VisualizerOverrides', 'args': (['SeriesLines', 'SeriesPoints'],)" in serialized
     assert "('SeriesPoints', {'names': 'Precision', 'marker_sizes': 8.0})" in serialized
     assert "'row_shares': [2.0, 1.0]" in serialized
     assert "'kind': 'VisibleTimeRange', 'args': ('frame',)" in serialized
@@ -604,10 +579,7 @@ def test_backend_can_show_camera_geometry_initially(
     blueprint, _ = rerun_calls["blueprints"][-1]
     serialized = repr(blueprint)
     assert "'active_tab': 1" in serialized
-    assert (
-        "'/scene/cameras': {'kind': 'EntityBehavior', 'args': (), 'visible': True}"
-        in serialized
-    )
+    assert "'/scene/cameras': {'kind': 'EntityBehavior', 'args': (), 'visible': True}" in serialized
 
 
 def test_backend_accepts_adapter_defined_blueprint_without_path_knowledge(
