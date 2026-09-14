@@ -104,9 +104,7 @@ def _scene_view(
     overrides = []
     if camera_paths:
         contents.append("scene/cameras/**")
-        overrides.append(
-            ViewOverride(path="/scene/cameras", visible=camera_frustums_visible)
-        )
+        overrides.append(ViewOverride(path="/scene/cameras", visible=camera_frustums_visible))
     if detection_path is not None and detection_path.startswith("scene/prediction/"):
         overrides.append(ViewOverride(path=f"/{detection_path}", show_labels=True))
     return ViewSpec(
@@ -118,9 +116,7 @@ def _scene_view(
     )
 
 
-def _detection_statistics_views(
-    observed_paths: set[str], timeline: str
-) -> list[ViewSpec]:
+def _detection_statistics_views(observed_paths: set[str], timeline: str) -> list[ViewSpec]:
     """Build compact IoU quality and match-count plot specifications."""
     metrics_root = "scene/metrics/detection"
     quality_paths = [
@@ -190,6 +186,7 @@ def _comparison_tab(
     timeline: str,
 ) -> LayoutGroup:
     """Build side-by-side GT and prediction scenes plus IoU plots."""
+
     def scene_comparison(
         camera_visible: bool,
         *,
@@ -390,9 +387,7 @@ def build_scene_blueprint(
     """Build the complete built-in scene layout from neutral entity paths."""
     paths = set(observed_paths)
     cameras = sorted(camera_paths)
-    scene_paths = {
-        path for path in paths if path == "scene" or path.startswith("scene/")
-    }
+    scene_paths = {path for path in paths if path == "scene" or path.startswith("scene/")}
     if not scene_paths:
         return None
 
