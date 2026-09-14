@@ -174,7 +174,7 @@ autoware-ml visualize \
 - `--device`: Execution device for preview inference (default: `auto`, which uses CUDA when available)
 - `--point-labels` / `--no-point-labels`: Log per-point text labels. Disabled by default because large semantic point clouds become slow when every point has text.
 - `--point-color-mode`: Initially active point-cloud tab: semantic class, normalized LiDAR intensity, or solid geometry color (default: `semantic`). All available modes remain selectable in Rerun.
-- `--camera-frustums` / `--no-camera-frustums`: Initial visibility of camera frustums and projected image planes in 3D views (default: hidden). When cameras are available, use the eye control beside `cameras` in the expanded Blueprint panel to show or hide them dynamically in each 3D view.
+- `--camera-frustums` / `--no-camera-frustums`: Initial visibility of camera frustums and projected image planes in 3D views (default: hidden). When cameras are available, use the **Camera projections OFF** / **Camera projections ON** switch inside a 3D comparison to change them dynamically; the eye control beside `cameras` remains available for per-view adjustment.
 - `--web-port`: Rerun web viewer HTTP port (default: `9090`)
 - `--grpc-port`: Rerun SDK gRPC port used by the web viewer proxy (default: `9876`)
 - `--wait` / `--no-wait`: Keep the Rerun web server alive after logging (default: `--wait`)
