@@ -175,61 +175,144 @@ def _detection_statistics_views(observed_paths: set[str], timeline: str) -> list
     return views
 
 
-def _comparison_tab(
+def _scene_task_name(observed_paths: set[str]) -> str:
+    """Infer the display name of the task represented by one scene."""
+    has_segmentation = any(path.endswith("/segmentation") for path in observed_paths)
+    has_detection = any(path.endswith("/detections") for path in observed_paths)
+    if has_segmentation and has_detection:
+        return "Multi"
+    if has_segmentation:
+        return "Segmentation3D"
+    if has_detection:
+        return "Detection3D"
+    return "Scene"
+
+
+def _task_comparison(
     observed_paths: set[str],
     camera_paths: Sequence[str],
     *,
-    name: str,
-    ground_truth_points: str | None,
-    prediction_points: str | None,
+    task_name: str,
     camera_frustums_visible: bool,
+    preferred_comparison: str,
     timeline: str,
 ) -> LayoutGroup:
-    """Build side-by-side GT and prediction scenes plus IoU plots."""
+    """Build a fixed prediction view with a selectable comparison view."""
 
     def scene_comparison(
         camera_visible: bool,
         *,
         layout_name: str,
     ) -> LayoutGroup:
-        scene_views = []
-        if any(
+        prediction_points = (
+            "scene/prediction/segmentation"
+            if "scene/prediction/segmentation" in observed_paths
+            else "scene/lidar/solid"
+        )
+        ground_truth_points = (
+            "scene/ground_truth/segmentation"
+            if "scene/ground_truth/segmentation" in observed_paths
+            else "scene/lidar/solid"
+        )
+        prediction_available = any(
+            path in observed_paths
+            for path in ("scene/prediction/segmentation", "scene/prediction/detections")
+        )
+        comparison_views: list[tuple[str, ViewSpec]] = []
+        ground_truth_available = any(
             path in observed_paths
             for path in (
                 "scene/ground_truth/segmentation",
                 "scene/ground_truth/detections",
             )
-        ):
-            scene_views.append(
-                _scene_view(
-                    observed_paths,
-                    camera_paths,
-                    name=f"GT · {name}",
-                    point_path=ground_truth_points,
-                    detection_path="scene/ground_truth/detections",
-                    camera_frustums_visible=camera_visible,
+        )
+        if ground_truth_available:
+            comparison_views.append(
+                (
+                    "GT",
+                    _scene_view(
+                        observed_paths,
+                        camera_paths,
+                        name=f"GT · {task_name}",
+                        point_path=ground_truth_points,
+                        detection_path="scene/ground_truth/detections",
+                        camera_frustums_visible=camera_visible,
+                    ),
                 )
             )
-        if any(
-            path in observed_paths
-            for path in (
-                "scene/prediction/segmentation",
-                "scene/prediction/detections",
+        if "scene/lidar/intensity" in observed_paths:
+            comparison_views.append(
+                (
+                    "Intensity",
+                    _scene_view(
+                        observed_paths,
+                        camera_paths,
+                        name="Intensity",
+                        point_path="scene/lidar/intensity",
+                        detection_path=None,
+                        camera_frustums_visible=camera_visible,
+                    ),
+                )
             )
-        ):
-            scene_views.append(
+        if "scene/prediction/entropy" in observed_paths:
+            comparison_views.append(
+                (
+                    "Entropy",
+                    _scene_view(
+                        observed_paths,
+                        camera_paths,
+                        name="Normalized entropy",
+                        point_path="scene/prediction/entropy",
+                        detection_path=None,
+                        camera_frustums_visible=camera_visible,
+                    ),
+                )
+            )
+        if "scene/prediction/probability" in observed_paths:
+            comparison_views.append(
+                (
+                    "Probability",
+                    _scene_view(
+                        observed_paths,
+                        camera_paths,
+                        name="Probability",
+                        point_path="scene/prediction/probability",
+                        detection_path=None,
+                        camera_frustums_visible=camera_visible,
+                    ),
+                )
+            )
+
+        children: list[ViewSpec | LayoutGroup] = []
+        if prediction_available:
+            children.append(
                 _scene_view(
                     observed_paths,
                     camera_paths,
-                    name=f"Prediction · {name}",
+                    name=f"Prediction · {task_name}",
                     point_path=prediction_points,
                     detection_path="scene/prediction/detections",
                     camera_frustums_visible=camera_visible,
                 )
             )
+        if comparison_views:
+            comparison_names = [name for name, _ in comparison_views]
+            active_comparison = (
+                comparison_names.index(preferred_comparison)
+                if preferred_comparison in comparison_names
+                else 0
+            )
+            children.append(
+                LayoutGroup(
+                    kind="tabs",
+                    children=tuple(view for _, view in comparison_views),
+                    name="Comparison",
+                    active=active_comparison,
+                )
+            )
         return LayoutGroup(
             kind="horizontal",
-            children=tuple(scene_views),
+            children=tuple(children),
             name=layout_name,
         )
 
@@ -240,13 +323,13 @@ def _comparison_tab(
                 scene_comparison(False, layout_name="Camera projections OFF"),
                 scene_comparison(True, layout_name="Camera projections ON"),
             ),
-            name=f"{name} comparison",
+            name=f"{task_name} comparison",
             active=int(camera_frustums_visible),
         )
     else:
         comparison = scene_comparison(
             camera_frustums_visible,
-            layout_name=f"{name} comparison",
+            layout_name=f"{task_name} comparison",
         )
     statistics = _detection_statistics_views(observed_paths, timeline)
     if not statistics:
@@ -261,7 +344,7 @@ def _comparison_tab(
                 name="Detection statistics",
             ),
         ),
-        name=f"{name} comparison",
+        name=f"{task_name} comparison",
         shares=(2.0, 1.0),
     )
 
@@ -289,15 +372,6 @@ def _camera_tab(observed_paths: set[str], camera_paths: Sequence[str]) -> Layout
             and observed_path not in prediction_paths
         )
         comparison_views = []
-        if ground_truth_paths:
-            comparison_views.append(
-                ViewSpec(
-                    kind="spatial2d",
-                    name=f"{camera_name} · GT",
-                    origin=path,
-                    contents=(path, *shared_paths, *ground_truth_paths),
-                )
-            )
         if prediction_paths:
             comparison_views.append(
                 ViewSpec(
@@ -305,6 +379,15 @@ def _camera_tab(observed_paths: set[str], camera_paths: Sequence[str]) -> Layout
                     name=f"{camera_name} · Prediction",
                     origin=path,
                     contents=(path, *shared_paths, *prediction_paths),
+                )
+            )
+        if ground_truth_paths:
+            comparison_views.append(
+                ViewSpec(
+                    kind="spatial2d",
+                    name=f"{camera_name} · GT",
+                    origin=path,
+                    contents=(path, *shared_paths, *ground_truth_paths),
                 )
             )
         if not comparison_views:
@@ -328,54 +411,6 @@ def _camera_tab(observed_paths: set[str], camera_paths: Sequence[str]) -> Layout
     return LayoutGroup(kind="tabs", children=tuple(camera_tabs), name="Cameras")
 
 
-def _uncertainty_tab(
-    observed_paths: set[str],
-    camera_paths: Sequence[str],
-    *,
-    camera_frustums_visible: bool,
-) -> LayoutGroup:
-    """Build entropy/semantic views with a visible camera projection switch."""
-
-    def comparison(camera_visible: bool, *, layout_name: str) -> LayoutGroup:
-        return LayoutGroup(
-            kind="horizontal",
-            children=(
-                _scene_view(
-                    observed_paths,
-                    camera_paths,
-                    name="Prediction · Entropy",
-                    point_path="scene/prediction/entropy",
-                    detection_path="scene/prediction/detections",
-                    camera_frustums_visible=camera_visible,
-                ),
-                _scene_view(
-                    observed_paths,
-                    camera_paths,
-                    name="Prediction · Semantic",
-                    point_path="scene/prediction/segmentation",
-                    detection_path="scene/prediction/detections",
-                    camera_frustums_visible=camera_visible,
-                ),
-            ),
-            name=layout_name,
-        )
-
-    if not camera_paths:
-        return comparison(
-            camera_frustums_visible,
-            layout_name="Uncertainty",
-        )
-    return LayoutGroup(
-        kind="tabs",
-        children=(
-            comparison(False, layout_name="Camera projections OFF"),
-            comparison(True, layout_name="Camera projections ON"),
-        ),
-        name="Uncertainty",
-        active=int(camera_frustums_visible),
-    )
-
-
 def build_scene_blueprint(
     observed_paths: Iterable[str],
     camera_paths: Iterable[str],
@@ -391,69 +426,21 @@ def build_scene_blueprint(
     if not scene_paths:
         return None
 
+    task_name = _scene_task_name(scene_paths)
     tabs: list[tuple[str, ViewSpec | LayoutGroup]] = []
-    comparison_arguments = {
-        "observed_paths": paths,
-        "camera_paths": cameras,
-        "camera_frustums_visible": camera_frustums_visible,
-        "timeline": timeline,
-    }
-    if any(path.endswith("/segmentation") for path in scene_paths):
+    has_task_output = any(path.endswith(("/segmentation", "/detections")) for path in scene_paths)
+    if has_task_output:
+        preferred_comparison = "Intensity" if point_color_mode == "intensity" else "GT"
         tabs.append(
             (
-                "Semantic",
-                _comparison_tab(
-                    **comparison_arguments,
-                    name="Semantic",
-                    ground_truth_points="scene/ground_truth/segmentation",
-                    prediction_points="scene/prediction/segmentation",
-                ),
-            )
-        )
-    if "scene/lidar/intensity" in scene_paths:
-        tabs.append(
-            (
-                "Intensity",
-                _comparison_tab(
-                    **comparison_arguments,
-                    name="Intensity",
-                    ground_truth_points="scene/lidar/intensity",
-                    prediction_points="scene/lidar/intensity",
-                ),
-            )
-        )
-    if "scene/lidar/solid" in scene_paths:
-        tabs.append(
-            (
-                "Geometry",
-                _comparison_tab(
-                    **comparison_arguments,
-                    name="Geometry",
-                    ground_truth_points="scene/lidar/solid",
-                    prediction_points="scene/lidar/solid",
-                ),
-            )
-        )
-    if not tabs and any(path.endswith("/detections") for path in scene_paths):
-        tabs.append(
-            (
-                "Detections",
-                _comparison_tab(
-                    **comparison_arguments,
-                    name="Detections",
-                    ground_truth_points=None,
-                    prediction_points=None,
-                ),
-            )
-        )
-    if "scene/prediction/entropy" in scene_paths:
-        tabs.append(
-            (
-                "Uncertainty",
-                _uncertainty_tab(
+                task_name,
+                _task_comparison(
                     paths,
                     cameras,
+                    task_name=task_name,
                     camera_frustums_visible=camera_frustums_visible,
+                    preferred_comparison=preferred_comparison,
+                    timeline=timeline,
                 ),
             )
         )
@@ -474,19 +461,12 @@ def build_scene_blueprint(
             )
         )
 
-    preferred_tab = {
-        "semantic": "Semantic",
-        "intensity": "Intensity",
-        "solid": "Geometry",
-    }[point_color_mode]
-    tab_names = [name for name, _ in tabs]
-    active_tab = tab_names.index(preferred_tab) if preferred_tab in tab_names else 0
     return BlueprintEvent(
         layout=LayoutGroup(
             kind="tabs",
             children=tuple(tab for _, tab in tabs),
-            active=active_tab,
-            name="Multi-task visualization",
+            active=0,
+            name=f"{task_name} visualization",
         ),
         blueprint_panel_expanded=bool(cameras),
         selection_panel_expanded=False,

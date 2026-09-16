@@ -47,11 +47,12 @@ def test_calibration_layout_is_expressed_only_as_neutral_specs() -> None:
     ]
 
 
-def test_scene_layout_includes_semantic_camera_and_statistics_views() -> None:
+def test_scene_layout_keeps_multi_prediction_left_and_comparison_selectable() -> None:
     paths = {
         "scene/ground_truth/segmentation",
         "scene/prediction/segmentation",
         "scene/prediction/entropy",
+        "scene/prediction/probability",
         "scene/ground_truth/detections",
         "scene/prediction/detections",
         "scene/lidar/intensity",
@@ -72,32 +73,89 @@ def test_scene_layout_includes_semantic_camera_and_statistics_views() -> None:
 
     assert blueprint is not None
     serialized = repr(blueprint)
-    assert "Semantic comparison" in serialized
-    assert "Prediction · Entropy" in serialized
+    assert "Semantic" not in serialized
+    assert "Multi comparison" in serialized
+    assert "Prediction · Multi" in serialized
+    assert "Normalized entropy" in serialized
+    assert "Probability" in serialized
     assert "front · GT" in serialized
     assert "front · Prediction" in serialized
     assert "3D IoU quality" in serialized
     assert "Detection matches" in serialized
     assert blueprint.blueprint_panel_expanded is True
     assert [child.name for child in blueprint.layout.children] == [
-        "Semantic comparison",
-        "Intensity comparison",
-        "Uncertainty",
+        "Multi comparison",
         "Cameras",
     ]
 
-    semantic_layout = blueprint.layout.children[0]
-    assert isinstance(semantic_layout, LayoutGroup)
-    camera_switch = semantic_layout.children[0]
+    multi_layout = blueprint.layout.children[0]
+    assert isinstance(multi_layout, LayoutGroup)
+    camera_switch = multi_layout.children[0]
     assert isinstance(camera_switch, LayoutGroup)
     assert camera_switch.kind == "tabs"
-    assert camera_switch.name == "Semantic comparison"
+    assert camera_switch.name == "Multi comparison"
     assert camera_switch.active == 0
     assert [child.name for child in camera_switch.children] == [
         "Camera projections OFF",
         "Camera projections ON",
     ]
+
+    comparison = camera_switch.children[0]
+    assert isinstance(comparison, LayoutGroup)
+    assert comparison.kind == "horizontal"
+    prediction = comparison.children[0]
+    comparison_options = comparison.children[1]
+    assert isinstance(prediction, ViewSpec)
+    assert prediction.name == "Prediction · Multi"
+    assert prediction.contents[:2] == (
+        "scene/prediction/segmentation",
+        "scene/prediction/detections",
+    )
+    assert isinstance(comparison_options, LayoutGroup)
+    assert comparison_options.kind == "tabs"
+    assert comparison_options.active == 0
+    assert [child.name for child in comparison_options.children] == [
+        "GT · Multi",
+        "Intensity",
+        "Normalized entropy",
+        "Probability",
+    ]
+    assert "scene/lidar/intensity" not in prediction.contents
+
+    camera_layout = blueprint.layout.children[1]
+    assert isinstance(camera_layout, LayoutGroup)
+    front_comparison = camera_layout.children[0]
+    assert isinstance(front_comparison, LayoutGroup)
+    assert [child.name for child in front_comparison.children] == [
+        "front · Prediction",
+        "front · GT",
+    ]
     assert "show_labels=True" in serialized
+
+
+def test_scene_layout_can_start_with_intensity_on_the_right() -> None:
+    blueprint = build_scene_blueprint(
+        {
+            "scene/prediction/segmentation",
+            "scene/ground_truth/segmentation",
+            "scene/lidar/intensity",
+            "scene/prediction/entropy",
+            "scene/prediction/probability",
+        },
+        [],
+        point_color_mode="intensity",
+        camera_frustums_visible=False,
+        timeline="frame",
+    )
+
+    assert blueprint is not None
+    assert isinstance(blueprint.layout, LayoutGroup)
+    comparison = blueprint.layout.children[0]
+    assert isinstance(comparison, LayoutGroup)
+    comparison_options = comparison.children[1]
+    assert isinstance(comparison_options, LayoutGroup)
+    assert comparison_options.active == 1
+    assert comparison_options.children[1].name == "Intensity"
 
 
 def test_scene_layout_camera_switch_respects_visible_initial_state() -> None:
@@ -118,8 +176,53 @@ def test_scene_layout_camera_switch_respects_visible_initial_state() -> None:
     camera_switch = blueprint.layout.children[0]
     assert isinstance(camera_switch, LayoutGroup)
     assert camera_switch.kind == "tabs"
-    assert camera_switch.name == "Semantic comparison"
+    assert camera_switch.name == "Multi comparison"
     assert camera_switch.active == 1
+
+
+def test_scene_layout_uses_task_name_for_single_task_predictions() -> None:
+    blueprint = build_scene_blueprint(
+        {
+            "scene/prediction/segmentation",
+            "scene/ground_truth/segmentation",
+        },
+        [],
+        point_color_mode="semantic",
+        camera_frustums_visible=False,
+        timeline="frame",
+    )
+
+    assert blueprint is not None
+    assert "Prediction · Segmentation3D" in repr(blueprint)
+    assert "Semantic" not in repr(blueprint)
+
+
+def test_detection_prediction_uses_solid_geometry_instead_of_intensity() -> None:
+    blueprint = build_scene_blueprint(
+        {
+            "scene/prediction/detections",
+            "scene/ground_truth/detections",
+            "scene/lidar/solid",
+            "scene/lidar/intensity",
+        },
+        [],
+        point_color_mode="semantic",
+        camera_frustums_visible=False,
+        timeline="frame",
+    )
+
+    assert blueprint is not None
+    assert isinstance(blueprint.layout, LayoutGroup)
+    comparison = blueprint.layout.children[0]
+    assert isinstance(comparison, LayoutGroup)
+    prediction = comparison.children[0]
+    assert isinstance(prediction, ViewSpec)
+    assert prediction.name == "Prediction · Detection3D"
+    assert prediction.contents == (
+        "scene/lidar/solid",
+        "scene/prediction/detections",
+    )
+    assert "scene/lidar/intensity" not in prediction.contents
 
 
 def test_unknown_scene_adapter_gets_a_generic_view() -> None:

@@ -161,59 +161,56 @@ def build_segmentation3d_events(
             float(pred_labels_np.shape[0]),
         )
     )
-    if pred_probs is not None and pred_logits is None:
-        pred_probs_np = as_numpy(pred_probs, np.float32)
-        if pred_probs_np.ndim != 2 or pred_probs_np.shape[0] != pred_labels_np.shape[0]:
-            raise ValueError("pred_probs must have shape (N, C) aligned with points")
-        events.append(
-            ScalarEvent(
-                path=f"{root_path}/metrics/segmentation/mean_confidence",
-                value=float(pred_probs_np.max(axis=1).mean()),
-            )
-        )
-        num_classes = pred_probs_np.shape[1]
-        if num_classes > 1:
-            entropy = -(pred_probs_np * np.log(pred_probs_np + 1e-8)).sum(axis=1)
-            entropy_norm = (entropy / np.log(num_classes)).astype(np.float32)
-            events.append(
-                PointCloud3DEvent(
-                    path=f"{root_path}/prediction/entropy",
-                    positions=point_positions,
-                    colors=scalar_to_heatmap_colors(entropy_norm),
-                    radii=radius,
-                )
-            )
-
+    probabilities: np.ndarray | None = None
     if pred_logits is not None:
         logits_np = as_numpy(pred_logits, np.float32)
         if logits_np.ndim != 2 or logits_np.shape[0] != pred_labels_np.shape[0]:
             raise ValueError("pred_logits must have shape (N, C) aligned with points")
-        if logits_np.shape[1] > 1:
-            shifted = logits_np - logits_np.max(axis=1, keepdims=True)
-            probabilities = np.exp(shifted)
-            probabilities /= probabilities.sum(axis=1, keepdims=True)
-            events.append(
+        if logits_np.shape[1] == 0:
+            raise ValueError("pred_logits must contain at least one class")
+        shifted = logits_np - logits_np.max(axis=1, keepdims=True)
+        probabilities = np.exp(shifted)
+        probabilities /= probabilities.sum(axis=1, keepdims=True)
+    elif pred_probs is not None:
+        probabilities = as_numpy(pred_probs, np.float32)
+        if probabilities.ndim != 2 or probabilities.shape[0] != pred_labels_np.shape[0]:
+            raise ValueError("pred_probs must have shape (N, C) aligned with points")
+        if probabilities.shape[1] == 0:
+            raise ValueError("pred_probs must contain at least one class")
+
+    if probabilities is not None:
+        confidence = probabilities.max(axis=1).astype(np.float32)
+        if probabilities.shape[1] == 1:
+            entropy_norm = np.zeros(probabilities.shape[0], dtype=np.float32)
+        else:
+            entropy = -(probabilities * np.log(np.clip(probabilities, 1e-8, 1.0))).sum(axis=1)
+            entropy_norm = np.clip(entropy / np.log(probabilities.shape[1]), 0.0, 1.0).astype(
+                np.float32
+            )
+        events.extend(
+            [
                 ScalarEvent(
                     path=f"{root_path}/metrics/segmentation/mean_confidence",
-                    value=float(probabilities.max(axis=1).mean()),
-                )
-            )
-            entropy = -(probabilities * np.log(np.clip(probabilities, 1e-8, 1.0))).sum(axis=1)
-            entropy_norm = (entropy / np.log(logits_np.shape[1])).astype(np.float32)
-            events.append(
+                    value=float(confidence.mean()),
+                ),
                 ScalarEvent(
                     path=f"{root_path}/metrics/segmentation/mean_entropy",
                     value=float(entropy_norm.mean()),
-                )
-            )
-            events.append(
+                ),
                 PointCloud3DEvent(
                     path=f"{root_path}/prediction/entropy",
                     positions=point_positions,
                     colors=scalar_to_heatmap_colors(entropy_norm),
                     radii=radius,
-                )
-            )
+                ),
+                PointCloud3DEvent(
+                    path=f"{root_path}/prediction/probability",
+                    positions=point_positions,
+                    colors=scalar_to_heatmap_colors(confidence),
+                    radii=radius,
+                ),
+            ]
+        )
 
     return events
 

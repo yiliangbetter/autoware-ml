@@ -640,7 +640,8 @@ def _log_segmentation_preview(
     pred_logits = predictions.get("pred_logits")
     if pred_logits is None:
         raise ValueError(
-            "Segmentation predictions must include 'pred_logits' for pointwise entropy."
+            "Segmentation predictions must include 'pred_logits' for pointwise "
+            "probability and entropy."
         )
     points = _get_segmentation_points(batch, pred_labels)
     class_names = _resolve_class_names(config, batch, raw_info, task="segmentation3d")
@@ -838,7 +839,8 @@ def _log_multitask_preview(
     segmentation_logits = predictions.get("seg_pred_logits")
     if segmentation_logits is None:
         raise ValueError(
-            "Multi-task predictions must include 'seg_pred_logits' for pointwise entropy."
+            "Multi-task predictions must include 'seg_pred_logits' for pointwise "
+            "probability and entropy."
         )
     segmentation_points = _get_segmentation_points(batch, segmentation_labels)
 
