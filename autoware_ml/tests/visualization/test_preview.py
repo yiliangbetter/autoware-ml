@@ -245,12 +245,14 @@ def test_preview_logs_a_segmentation_sample(preview_session: RecordingBackend) -
     point_paths = preview_session.paths_of(PointCloud3DEvent)
     assert "scene/prediction/segmentation" in point_paths
     assert "scene/ground_truth/segmentation" in point_paths
+    assert "scene/prediction/entropy" in point_paths
+    assert "scene/prediction/probability" in point_paths
 
 
-def test_preview_requires_logits_for_pointwise_entropy(
+def test_preview_requires_logits_for_pointwise_probability_and_entropy(
     preview_session: RecordingBackend,
 ) -> None:
-    with pytest.raises(ValueError, match="pred_logits.*pointwise entropy"):
+    with pytest.raises(ValueError, match="pred_logits.*pointwise.*entropy"):
         run_visualization_preview(
             _SegmentationWithoutLogitsModel(),
             PreviewDataModule([_segmentation_sample()], _SEGMENTATION_COLLATION),
@@ -395,10 +397,12 @@ def test_multitask_preview_omits_explicitly_unavailable_ground_truth(
     assert preview_session.paths_of(Boxes3DEvent) == ["scene/prediction/detections"]
     semantic_paths = preview_session.paths_of(PointCloud3DEvent)
     assert "scene/prediction/segmentation" in semantic_paths
+    assert "scene/prediction/entropy" in semantic_paths
+    assert "scene/prediction/probability" in semantic_paths
     assert "scene/ground_truth/segmentation" not in semantic_paths
 
 
-def test_multitask_preview_requires_logits_for_pointwise_entropy(
+def test_multitask_preview_requires_logits_for_pointwise_probability_and_entropy(
     preview_session: RecordingBackend,
 ) -> None:
     sample = {
@@ -411,7 +415,7 @@ def test_multitask_preview_requires_logits_for_pointwise_entropy(
         "has_segmentation_ground_truth": True,
     }
 
-    with pytest.raises(ValueError, match="seg_pred_logits.*pointwise entropy"):
+    with pytest.raises(ValueError, match="seg_pred_logits.*pointwise.*entropy"):
         run_visualization_preview(
             _MultiWithoutLogitsModel(),
             PreviewDataModule(

@@ -462,6 +462,10 @@ def test_backend_builds_named_comparison_views_without_root_origins(
                 path="scene/prediction/entropy",
                 positions=np.zeros((2, 3), dtype=np.float32),
             ),
+            PointCloud3DEvent(
+                path="scene/prediction/probability",
+                positions=np.zeros((2, 3), dtype=np.float32),
+            ),
             PinholeEvent(
                 path="scene/cameras/front",
                 image_from_camera=np.eye(3, dtype=np.float32),
@@ -501,12 +505,17 @@ def test_backend_builds_named_comparison_views_without_root_origins(
     blueprint, options = rerun_calls["blueprints"][-1]
     serialized = repr(blueprint)
     assert options == {"make_active": True, "make_default": True}
-    assert "GT · Semantic" in serialized
-    assert "Prediction · Semantic" in serialized
-    assert "GT · Intensity" in serialized
-    assert "Prediction · Entropy" in serialized
+    assert "Semantic" not in serialized
+    assert "Multi comparison" in serialized
+    assert "GT · Multi" in serialized
+    assert "Prediction · Multi" in serialized
+    assert "Prediction · Intensity" not in serialized
+    assert "Normalized entropy" in serialized
+    assert "Probability" in serialized
+    assert serialized.index("Prediction · Multi") < serialized.index("GT · Multi")
     assert "front · GT" in serialized
     assert "front · Prediction" in serialized
+    assert serialized.index("front · Prediction") < serialized.index("front · GT")
     assert "scene/cameras/front/projected/ground_truth/segmentation" in serialized
     assert "scene/cameras/front/projected/prediction/detections" in serialized
     assert "3D IoU quality" in serialized
@@ -528,9 +537,9 @@ def test_backend_builds_named_comparison_views_without_root_origins(
     assert "('SeriesPoints', {'names': 'Precision', 'marker_sizes': 8.0})" in serialized
     assert "'row_shares': [2.0, 1.0]" in serialized
     assert "'kind': 'VisibleTimeRange', 'args': ('frame',)" in serialized
-    # Each of the Semantic and Intensity comparisons has two metric plots,
-    # and every plot must receive a distinct Rerun time-range archetype.
-    assert len(rerun_calls["visible_time_ranges"]) == 4
+    # The single task comparison has two metric plots, each with an independent
+    # Rerun time-range archetype.
+    assert len(rerun_calls["visible_time_ranges"]) == 2
 
 
 def test_blueprint_panel_stays_collapsed_without_cameras(

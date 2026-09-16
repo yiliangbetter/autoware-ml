@@ -19,6 +19,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
+from autoware_ml.visualization.colors import scalar_to_heatmap_colors
 from autoware_ml.visualization.events import (
     AnnotationContextEvent,
     PointCloud3DEvent,
@@ -54,7 +55,7 @@ def test_build_segmentation3d_events_logs_prediction_and_ground_truth() -> None:
     assert prediction.labels is None
 
 
-def test_build_segmentation3d_events_logs_entropy_cloud_and_confidence() -> None:
+def test_build_segmentation3d_events_logs_uncertainty_clouds_and_metrics() -> None:
     events = build_segmentation3d_events(
         _TWO_POINTS,
         np.array([0, 1], dtype=np.int64),
@@ -63,17 +64,21 @@ def test_build_segmentation3d_events_logs_entropy_cloud_and_confidence() -> None
 
     point_paths = [event.path for event in events if isinstance(event, PointCloud3DEvent)]
     assert "scene/prediction/entropy" in point_paths
+    assert "scene/prediction/probability" in point_paths
 
     metrics = {event.path: event.value for event in events if isinstance(event, ScalarEvent)}
     assert metrics["scene/metrics/segmentation/num_points"] == 2.0
     assert metrics["scene/metrics/segmentation/mean_confidence"] == pytest.approx(0.9)
+    assert 0.0 <= metrics["scene/metrics/segmentation/mean_entropy"] <= 1.0
 
 
-def test_build_segmentation3d_events_computes_entropy_from_logits() -> None:
+def test_build_segmentation3d_events_computes_probability_and_entropy_from_logits() -> None:
+    logits = np.array([[10.0, 0.0], [0.0, 10.0]], dtype=np.float32)
     events = build_segmentation3d_events(
         _TWO_POINTS,
         np.array([0, 1], dtype=np.int64),
-        pred_logits=np.array([[10.0, 0.0], [0.0, 10.0]], dtype=np.float32),
+        pred_probs=np.full((2, 2), 0.5, dtype=np.float32),
+        pred_logits=logits,
     )
     entropy = next(
         event
@@ -82,8 +87,30 @@ def test_build_segmentation3d_events_computes_entropy_from_logits() -> None:
     )
     assert entropy.colors is not None
     assert entropy.colors.shape == (2, 4)
+    probability = next(
+        event
+        for event in events
+        if isinstance(event, PointCloud3DEvent) and event.path.endswith("/probability")
+    )
+    shifted = logits - logits.max(axis=1, keepdims=True)
+    probabilities = np.exp(shifted) / np.exp(shifted).sum(axis=1, keepdims=True)
+    expected_colors = scalar_to_heatmap_colors(probabilities.max(axis=1))
+    np.testing.assert_array_equal(probability.colors, expected_colors)
     metrics = {event.path: event.value for event in events if isinstance(event, ScalarEvent)}
     assert metrics["scene/metrics/segmentation/mean_entropy"] < 0.001
+    assert metrics["scene/metrics/segmentation/mean_confidence"] > 0.999
+
+
+def test_build_segmentation3d_events_normalizes_maximum_entropy_to_one() -> None:
+    events = build_segmentation3d_events(
+        _TWO_POINTS,
+        np.array([0, 0], dtype=np.int64),
+        pred_logits=np.zeros((2, 4), dtype=np.float32),
+    )
+
+    metrics = {event.path: event.value for event in events if isinstance(event, ScalarEvent)}
+    assert metrics["scene/metrics/segmentation/mean_entropy"] == pytest.approx(1.0)
+    assert metrics["scene/metrics/segmentation/mean_confidence"] == pytest.approx(0.25)
 
 
 def test_build_segmentation3d_events_emits_point_labels_on_request() -> None:
