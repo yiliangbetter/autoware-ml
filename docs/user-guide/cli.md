@@ -173,7 +173,7 @@ autoware-ml visualize \
 - `--backend`: Visualization backend (default: `rerun`)
 - `--device`: Execution device for preview inference (default: `auto`, which uses CUDA when available)
 - `--point-labels` / `--no-point-labels`: Log per-point text labels. Disabled by default because large semantic point clouds become slow when every point has text.
-- `--point-color-mode`: Initially active point-cloud tab: semantic class, normalized LiDAR intensity, or solid geometry color (default: `semantic`). All available modes remain selectable in Rerun.
+- `--point-color-mode`: Initial comparison preference (default: `semantic`, which opens GT). `intensity` opens the right-hand normalized LiDAR intensity tab when available; `solid` remains available for data-only and custom adapters. Prediction stays fixed on the left.
 - `--camera-frustums` / `--no-camera-frustums`: Initial visibility of camera frustums and projected image planes in 3D views (default: hidden). When cameras are available, use the **Camera projections OFF** / **Camera projections ON** switch inside a 3D comparison to change them dynamically; the eye control beside `cameras` remains available for per-view adjustment.
 - `--web-port`: Rerun web viewer HTTP port (default: `9090`)
 - `--grpc-port`: Rerun SDK gRPC port used by the web viewer proxy (default: `9876`)
@@ -216,9 +216,9 @@ autoware-ml visualize \
 Current visualization coverage:
 
 - calibration status: camera image, projected lidar overlay, fused image, status labels, and confidence summary
-- segmentation3d: GT/PD point clouds, semantic/intensity/solid coloring, and pointwise entropy computed from prediction logits
+- segmentation3d: prediction fixed on the left, with selectable GT, intensity, normalized entropy, and softmax probability views on the right
 - detection3d: GT/PD boxes overlaid on point clouds with prediction labels initially hidden to avoid proposal clutter; labels remain available through Rerun's **Show labels** property, while line-and-point plots include same-class yaw-aware 3D IoU and pre-threshold best-overlap signals
-- multi-task PTv3: combined segmentation and detection comparisons, optional calibrated live 3D camera frustums, and 10 Hz prediction-only intermediate frames between 1 Hz GT anchors
+- multi-task PTv3: task-named **Multi** comparisons with prediction fixed on the left; selectable GT, intensity, normalized entropy, and softmax probability on the right; optional calibrated live 3D camera frustums; and 10 Hz prediction-only intermediate frames between 1 Hz GT anchors
 
 ## mlflow ui
 

@@ -149,13 +149,14 @@ The segmentation adapter can log:
 - predicted semantic labels as per-point colors
 - optional ground-truth labels
 - sample metadata and point counts
-- optional mean confidence from `pred_probs`
-- pointwise normalized entropy computed from `pred_logits` (softmax followed by
-  `-sum(p * log(p)) / log(num_classes)`)
-- selectable point coloring: semantic labels, LiDAR intensity, or a solid color
+- pointwise prediction probability computed as the maximum class probability
+  after applying softmax to `pred_logits`
+- pointwise normalized entropy computed from the same probabilities as
+  `-sum(p * log(p)) / log(num_classes)`, explicitly clipped to `[0, 1]`
+- mean confidence and normalized-entropy metrics
 
-This matches the current segmentation prediction contract, which already
-returns `pred_labels` and `pred_probs`.
+This matches the current segmentation prediction contract, which returns
+`pred_labels` and `pred_logits` (and may also expose `pred_probs`).
 
 Point positions are read from `points` when present, and from `coord` otherwise.
 PTv3 pipelines drop raw points during grid sampling, so their samples are
@@ -166,23 +167,27 @@ point-level positions that align with `origin_segment` labels.
 
 The existing `multi/ptv3` configurations are supported by the preview pipeline.
 A combined sample is logged below one `scene` hierarchy. The Rerun blueprint
-presents ground truth and prediction side by side, with the matching detection
-boxes overlaid on each point cloud. Prediction previews reuse the model's
-decoded detection output and pointwise segmentation logits; no visualization
-code is added to the model.
+names the comparison after the inferred task, so a combined detection and
+segmentation scene is labeled **Multi**, never **Semantic**. Prediction previews
+reuse the model's decoded detection output and pointwise segmentation logits;
+no visualization code is added to the model.
 
 The explicit scene layout contains:
 
-- a **Semantic** comparison with GT and predicted pointwise classes
-- an **Intensity** comparison using normalized LiDAR return intensity
-- a **Geometry** comparison with a neutral point color
-- an **Uncertainty** comparison between logit entropy and predicted semantics
+- a fixed **Prediction · Multi** view on the left, containing predicted
+  pointwise classes and predicted detection boxes
+- a right-hand comparison selector with **GT · Multi**, **Intensity**,
+  **Normalized entropy**, and **Probability** views when their data is available
+- raw LiDAR intensity only in the right-hand **Intensity** view; prediction does
+  not have a separate intensity rendering
 - a **Cameras** tab for the image streams, while every 3D comparison also
   contains optional calibrated camera frustums and image planes
-- compact 3D IoU quality and match-count plots below GT/PD detection comparisons
+- prediction-first camera comparisons
+- compact 3D IoU quality and match-count plots below the task comparison
 
-The three point-cloud tabs make the coloring mode selectable in the viewer.
-`--point-color-mode` only chooses which one is initially active.
+The right-hand tabs keep Prediction visible while changing only the comparison
+source. `--point-color-mode intensity` initially selects **Intensity** when it is
+available; the default starts on **GT**.
 
 ### Detection 3D
 
@@ -256,8 +261,11 @@ timestamped history for the plots. Intermediate prediction records also force
 from previous frames cannot accumulate.
 
 The preview setting `VisualizationPreviewConfig.point_color_mode` accepts
-`semantic` (default), `intensity`, or `solid`. For `intensity`, the fourth point
-feature is normalized per frame and rendered with the shared scalar heatmap.
+`semantic` (default), `intensity`, or `solid` for compatibility with data-only
+and custom adapters. In prediction comparisons, `intensity` initially selects
+the right-hand **Intensity** tab, while the other values start on the first
+available comparison (normally **GT**). The fourth point feature is normalized
+per frame for the intensity view.
 
 It normalizes both existing decoded output styles:
 
