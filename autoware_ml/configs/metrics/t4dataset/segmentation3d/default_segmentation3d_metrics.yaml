@@ -4,3 +4,7 @@ defaults:
   - filters: default_segmentation3d_filters
   - components: default_segmentation3d_components
   - _self_
+# Stages that also log the per-class breakdown of the whole-scene IoU and
+# recall. Validation stays lean by default; a tuning study widens this to
+# [val, test] to read a per-class objective every epoch.
+detail_stages: [test]

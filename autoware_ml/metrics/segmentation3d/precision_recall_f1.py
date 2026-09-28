@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import torch
 
-from autoware_ml.metrics.base import EvalStage, Metric
+from autoware_ml.metrics.base import EvalStage, Metric, MetricFilter
 from autoware_ml.metrics.segmentation3d.confusion import (
     ConfusionState,
     class_name_token,
@@ -15,7 +15,30 @@ from autoware_ml.metrics.segmentation3d.confusion import (
 class PrecisionRecallF1(Metric[ConfusionState]):
     """Macro mean recall in every stage so validation has a recall headline. Test
     adds macro precision and F1 and the per-class breakdown.
+
+    ``detail_stages`` widens that breakdown to other stages, so a tuning study
+    can read a per-class recall at validation without every training run
+    logging it.
     """
+
+    def __init__(
+        self,
+        stages: tuple[str, ...] | list[str] = ("val", "test"),
+        filter: MetricFilter | None = None,
+        detail_stages: tuple[str, ...] | list[str] = ("test",),
+    ) -> None:
+        """Store the stages this metric runs in and where it breaks out classes.
+
+        Args:
+            stages: Stage names this metric reports for.
+            filter: Optional selection axis, ``None`` for the whole scene.
+            detail_stages: Stage names that also report macro precision and F1
+                and the per-class recall, precision, and F1.
+        """
+        super().__init__(stages=stages, filter=filter)
+        self.detail_stages: frozenset[EvalStage] = frozenset(
+            EvalStage(stage) for stage in detail_stages
+        )
 
     def evaluate(self, state: ConfusionState, stage: EvalStage) -> dict[str, float]:
         """Compute precision, recall, and F1 metrics from a confusion state.
@@ -31,7 +54,7 @@ class PrecisionRecallF1(Metric[ConfusionState]):
         recall = torch.where(state.actual > 0, state.true_positive / state.actual, zeros)
 
         report = {"mRecall": macro(recall, state.has_support)}
-        if stage is not EvalStage.TEST:
+        if stage not in self.detail_stages:
             return report
 
         precision = torch.where(state.predicted > 0, state.true_positive / state.predicted, zeros)

@@ -1,9 +1,9 @@
 confusion_components:
   # Whole-scene.
   - { _target_: autoware_ml.metrics.segmentation3d.frame_count.FrameCount, stages: [val, test] }
-  - { _target_: autoware_ml.metrics.segmentation3d.iou.IoU, stages: [val, test] }
+  - { _target_: autoware_ml.metrics.segmentation3d.iou.IoU, stages: [val, test], detail_stages: '${metric_params.segmentation3d.detail_stages}' }
   - { _target_: autoware_ml.metrics.segmentation3d.accuracy.Accuracy, stages: [val, test] }
-  - { _target_: autoware_ml.metrics.segmentation3d.precision_recall_f1.PrecisionRecallF1, stages: [val, test] }
+  - { _target_: autoware_ml.metrics.segmentation3d.precision_recall_f1.PrecisionRecallF1, stages: [val, test], detail_stages: '${metric_params.segmentation3d.detail_stages}' }
   - { _target_: autoware_ml.metrics.segmentation3d.confusion_matrix.ConfusionMatrix, stages: [test] }
   # Road slice.
   - { _target_: autoware_ml.metrics.segmentation3d.frame_count.FrameCount, stages: [test], filter: '${metric_params.segmentation3d.filters.region_filters.road}' }

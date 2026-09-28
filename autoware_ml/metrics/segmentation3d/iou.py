@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import torch
 
-from autoware_ml.metrics.base import EvalStage, Metric
+from autoware_ml.metrics.base import EvalStage, Metric, MetricFilter
 from autoware_ml.metrics.segmentation3d.confusion import (
     ConfusionState,
     class_name_token,
@@ -15,7 +15,30 @@ from autoware_ml.metrics.segmentation3d.confusion import (
 class IoU(Metric[ConfusionState]):
     """Macro mean IoU in every stage. Test adds the frequency-weighted IoU and the
     per-class IoU for each class with ground-truth support.
+
+    ``detail_stages`` widens that breakdown to other stages, so a tuning study
+    can read a per-class value at validation without every training run
+    logging it.
     """
+
+    def __init__(
+        self,
+        stages: tuple[str, ...] | list[str] = ("val", "test"),
+        filter: MetricFilter | None = None,
+        detail_stages: tuple[str, ...] | list[str] = ("test",),
+    ) -> None:
+        """Store the stages this metric runs in and where it breaks out classes.
+
+        Args:
+            stages: Stage names this metric reports for.
+            filter: Optional selection axis, ``None`` for the whole scene.
+            detail_stages: Stage names that also report the frequency-weighted
+                IoU and the per-class IoU.
+        """
+        super().__init__(stages=stages, filter=filter)
+        self.detail_stages: frozenset[EvalStage] = frozenset(
+            EvalStage(stage) for stage in detail_stages
+        )
 
     def evaluate(self, state: ConfusionState, stage: EvalStage) -> dict[str, float]:
         """Compute IoU metrics from a confusion state.
@@ -32,7 +55,7 @@ class IoU(Metric[ConfusionState]):
         iou = torch.where(union > 0, state.true_positive / union, zeros)
 
         report = {"mIoU": macro(iou, state.has_support)}
-        if stage is not EvalStage.TEST:
+        if stage not in self.detail_stages:
             return report
 
         if bool(state.has_support.any()):
