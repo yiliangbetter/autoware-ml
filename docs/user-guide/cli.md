@@ -25,6 +25,10 @@ Bash completion is installed automatically by the Docker image build and by
 | `session detach` | Disconnect raw tmux clients from a managed session        |
 | `session ls`     | List managed background tasks                             |
 | `session stop`   | Stop a managed background task                            |
+| `tune init`      | Create a tuning study and queue its reference trials      |
+| `tune train`     | Train a batch of tuning trials                            |
+| `tune measure`   | Validate and benchmark trained tuning trials              |
+| `tune status`    | Show a tuning study's trials and Pareto front             |
 
 ## train
 
@@ -283,6 +287,35 @@ Current visualization coverage:
 - segmentation3d: GT/PD point clouds, semantic/intensity/solid coloring, and pointwise entropy computed from the predicted class probabilities
 - detection3d: GT/PD boxes overlaid on point clouds with class and score labels, and line-and-point plots of same-class yaw-aware 3D IoU and pre-threshold best-overlap signals
 - multi-task: combined segmentation and detection comparisons with optional calibrated camera frustums, and prediction-only frames between annotated samples
+
+## tune
+
+Drive a two-phase Optuna study: train trials in batches, measure them in a
+later batch, and only then report each trial to the sampler. See
+[Optuna](optuna.md#two-phase-batch-tuning) for the workflow and the config block.
+
+```bash
+autoware-ml tune init --config-name <tuning_config> [hydra_overrides...]
+autoware-ml tune train --config-name <tuning_config> --n-trials <n> [--gpus 0,1] [hydra_overrides...]
+autoware-ml tune measure --config-name <tuning_config> [--frames <n>] [--max-trials <n>] [hydra_overrides...]
+autoware-ml tune status --config-name <tuning_config> [hydra_overrides...]
+```
+
+**Arguments:**
+
+- `--config-name`: A config with a `tuning` block, such as `segmentation3d/litept/tune_voxel012_122m_t4dataset_j6gen2`
+- `--n-trials` (`train`): Number of trainings to launch in this batch
+- `--gpus` (`train`): Comma-separated device ids; one training runs per device at a time. Without it, trainings run one after another on the visible devices.
+- `--frames` (`measure`): Timed frames per trial, overriding the config
+- `--max-trials` (`measure`): Measure at most this many trials in this call
+
+Hydra overrides apply to every trial of the invocation, after the trial's own
+overrides, so a smoke test can shorten every training:
+
+```bash
+autoware-ml tune train --config-name segmentation3d/litept/tune_voxel012_122m_t4dataset_j6gen2 \
+    --n-trials 1 trainer.max_epochs=1 +trainer.limit_train_batches=2 +trainer.limit_val_batches=2
+```
 
 ## mlflow ui
 

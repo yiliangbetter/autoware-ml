@@ -69,6 +69,58 @@ configs they inherit from.
 autoware-ml train --config-name segmentation3d/litept/t4dataset/voxel012_tiny_b16_50e_t4dataset_122m_j6gen2_semaseg
 ```
 
+## Hyperparameter tuning
+
+`segmentation3d/litept/tune_voxel012_122m_t4dataset_j6gen2` defines a
+two-phase Optuna study over the LitePT architecture, driven by the `tune`
+commands described in [Optuna](../user-guide/optuna.md#two-phase-batch-tuning).
+Every trial trains a fixed 12 epochs without early stopping, so the study
+compares architectures rather than schedules.
+
+### Search space
+
+The sampler draws scalars, so the per-stage lists are named presets in
+`autoware_ml/tuning/presets.py`. Every preset keeps each width divisible by
+its head count and, wherever possible, 18 channels per head so the rotary
+embedding rotates the whole head.
+
+| Parameter           | Values                           | Notes                                                                                                                                                                                                                         |
+| ------------------- | -------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `grid_size`         | 0.10 to 0.18 m                   | The largest latency lever; coarse grids collapse small classes such as debris.                                                                                                                                                |
+| `width_preset`      | base, medium, tiny, small, micro | Encoder and decoder widths and head counts. `tiny` is PTv3-tiny's ladder and the only preset with 16 channels per head, kept as the comparability anchor.                                                                     |
+| `conv_depth_preset` | 2-2-2, 1-1-1                     | Blocks in the three convolution stages. Each block costs the same arithmetic at every stage because width doubles as the point count quarters.                                                                                |
+| `attn_depth_preset` | 6-2, 4-2, 2-2, 2-1               | Blocks in the two attention stages. A block here carries far more parameters and kernel launches than a convolution block. A stage of depth d reads d serialization orders, so even depths match the two the export declares. |
+| `dec_depth_preset`  | none, light                      | Decoder blocks: unpooling only, or PTv3-tiny's two attention blocks.                                                                                                                                                          |
+| `patch_size`        | 256, 512, 1024                   | Attention window at the attention stages and in the decoder. Past the stage's point count the window is already global.                                                                                                       |
+| `mlp_ratio`         | 2, 3, 4                          | Feed-forward expansion. Only attention blocks carry an MLP, so this touches the two deepest stages alone.                                                                                                                     |
+| `rope_base`         | 10 to 1000, log-uniform          | Base of the rotary frequency ladder. The fastest rung is fixed at one radian per voxel; the base sets how far the slowest reaches.                                                                                            |
+| `stem_type`         | linear, conv                     | Embedding stem; the convolution stem uses a 3x3x3 kernel.                                                                                                                                                                     |
+
+Deliberately fixed: the gating (which stages convolve and which attend), the
+serialization orders, and the regularization and numerics settings
+(`drop_path`, the dropouts, `shuffle_orders`, `qkv_bias`, `qk_scale`,
+`pre_norm`, flash attention and the upcast flags). None of them changes the
+cost of the deployed graph, and the regularizers only show over schedules
+longer than a trial's. `drop_path`, which now interacts with depth, and
+`shuffle_orders`, since training sees four orders while deployment reads two,
+are candidates for a follow-up study once an architecture is chosen.
+
+### Objectives
+
+Latency is minimized while mIoU and debris recall are maximized. Debris
+recall below 0.4 marks a trial infeasible, so the Pareto front never holds a
+model that lost the class, while the trial's values still inform the sampler.
+Per-class metrics are only broken out at test by default, so the tuning config
+sets the dataset's `detail_stages` to `[val, test]` to log them every epoch.
+LitePT-tiny and LitePT-base are queued as reference trials.
+
+```bash
+autoware-ml tune init --config-name segmentation3d/litept/tune_voxel012_122m_t4dataset_j6gen2
+autoware-ml tune train --config-name segmentation3d/litept/tune_voxel012_122m_t4dataset_j6gen2 --n-trials 8 --gpus 0,1
+autoware-ml tune measure --config-name segmentation3d/litept/tune_voxel012_122m_t4dataset_j6gen2
+autoware-ml tune status --config-name segmentation3d/litept/tune_voxel012_122m_t4dataset_j6gen2
+```
+
 ## Export contract
 
 Declared identically to [PTv3](ptv3.md#onnx-preprocessing-contract), but the
@@ -89,6 +141,7 @@ is future work.
 | `autoware_ml/models/segmentation3d/ptv3_base.py`      | `PTv3EncoderExportBase`, shared export inputs |
 | `autoware_ml/models/segmentation3d/heads/ptv3.py`     | Decoder gating (`dec_conv`, `dec_attn`)       |
 | `autoware_ml/configs/tasks/*/litept/`                 | Experiment configurations                     |
+| `autoware_ml/tuning/`                                 | Presets, search space, and tuning phases      |
 | `autoware_ml/models/detection3d/tests/test_litept.py` | Rotary, gating, and export tests              |
 
 ## Acknowledgment
