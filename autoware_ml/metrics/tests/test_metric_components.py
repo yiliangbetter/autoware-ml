@@ -179,6 +179,19 @@ def test_precision_recall_f1_test_adds_macro_and_per_class() -> None:
     assert {"mRecall", "mPrecision", "mF1", "recall_car", "precision_car", "f1_car"} <= set(out)
 
 
+def test_detail_stages_widen_the_per_class_breakdown_to_validation() -> None:
+    # A tuning study reads a per-class recall at validation; the opt-in must
+    # not change what the default logs.
+    iou = IoU(detail_stages=["val", "test"]).evaluate(_conf_state(), EvalStage.VAL)
+    assert {"mIoU", "fwIoU", "iou_car", "iou_road"} <= set(iou)
+    prf = PrecisionRecallF1(detail_stages=["val", "test"]).evaluate(_conf_state(), EvalStage.VAL)
+    assert {"mRecall", "mPrecision", "recall_car", "recall_road"} <= set(prf)
+    assert prf["recall_car"] == pytest.approx(0.5)
+    assert set(IoU(detail_stages=["val"]).evaluate(_conf_state(), EvalStage.TEST)) == {"mIoU"}
+    with pytest.raises(ValueError):
+        IoU(detail_stages=["train"])
+
+
 def test_suite_gates_metrics_by_configured_stages() -> None:
     """A metric whose stages exclude val must not emit anything at val."""
     box = torch.tensor([[0.0, 0.0, 0.0, 4.0, 2.0, 1.5, 0.0, 0.0, 0.0]])
