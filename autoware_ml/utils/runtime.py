@@ -21,11 +21,15 @@ seeding, callback creation, trainer construction, and logging helpers.
 from __future__ import annotations
 
 import logging
+from collections.abc import Sequence
+from dataclasses import dataclass
 from pathlib import Path
 
 import hydra
 import lightning as L
 import torch
+from hydra import compose, initialize_config_dir, initialize_config_module
+from hydra.core.global_hydra import GlobalHydra
 from hydra.core.hydra_config import HydraConfig
 from lightning.fabric.utilities.logger import _convert_params, _flatten_dict
 from lightning.pytorch.loggers import Logger, MLFlowLogger
@@ -35,6 +39,7 @@ import polars as pl
 
 from autoware_ml.configs.paths import CONFIGS_ROOT
 from autoware_ml.configs.resolvers import register_config_resolvers
+from autoware_ml.utils.cli.helpers import resolve_config_reference
 from autoware_ml.utils.mlflow_helpers import sanitize_mlflow_param_keys
 
 logger = logging.getLogger(__name__)
@@ -257,3 +262,95 @@ def log_hyperparameters(cfg: DictConfig, trainer_logger: Logger | None) -> None:
     if isinstance(trainer_logger, MLFlowLogger) and rank_zero_only.rank == 0:
         params = _drop_params_already_logged(trainer_logger, params)
     trainer_logger.log_hyperparams(params)
+
+
+@dataclass(frozen=True)
+class ConfigReference:
+    """A task config reference resolved once, the way the CLI resolves it.
+
+    Resolution consults the filesystem, so a reference must be resolved
+    before anything creates directories that could shadow a bundled config
+    name, and reused from then on.
+
+    Attributes:
+        config_path: Directory of a filesystem config, ``None`` for bundled.
+        config_name: Hydra config name, ``tasks/...`` for bundled configs.
+        searchpath_overrides: Overrides that expose the bundled configs to a
+            filesystem config.
+        config_prefix: Namespace prefix of the bundled task configs.
+    """
+
+    config_path: str | None
+    config_name: str
+    searchpath_overrides: tuple[str, ...]
+    config_prefix: str = "tasks"
+
+    @classmethod
+    def resolve(cls, config_value: str, config_prefix: str = "tasks") -> ConfigReference:
+        """Resolve a command-line config value.
+
+        Args:
+            config_value: Config name or YAML path as given on the command line.
+            config_prefix: Namespace prefix of the bundled task configs.
+
+        Returns:
+            The resolved reference.
+        """
+        config_path, config_name, overrides = resolve_config_reference(config_value, config_prefix)
+        return cls(config_path, config_name, tuple(overrides), config_prefix)
+
+    @property
+    def user_config_name(self) -> str:
+        """The user-facing config name without the bundled prefix."""
+        return self.config_name.removeprefix(f"{self.config_prefix}/")
+
+    def hydra_argv(self) -> list[str]:
+        """Return the ``--config-name``/``--config-path`` arguments for a Hydra entrypoint."""
+        argv = ["--config-name", self.config_name]
+        if self.config_path is not None:
+            argv.extend(["--config-path", self.config_path])
+        return argv
+
+    def with_searchpath(self, overrides: Sequence[str]) -> list[str]:
+        """Append the searchpath overrides unless the caller already set one."""
+        combined = list(overrides)
+        if not any(arg.startswith("hydra.searchpath=") for arg in combined):
+            combined.extend(self.searchpath_overrides)
+        return combined
+
+    def compose(self, overrides: Sequence[str] = ()) -> DictConfig:
+        """Compose the configuration outside a Hydra job.
+
+        Args:
+            overrides: Hydra overrides in command-line syntax.
+
+        Returns:
+            The composed configuration without the ``hydra`` node.
+        """
+        compose_overrides = self.with_searchpath(overrides)
+        GlobalHydra.instance().clear()
+        if self.config_path is None:
+            with initialize_config_module(version_base=None, config_module="autoware_ml.configs"):
+                return compose(config_name=self.config_name, overrides=compose_overrides)
+        with initialize_config_dir(version_base=None, config_dir=self.config_path):
+            return compose(config_name=self.config_name, overrides=compose_overrides)
+
+
+def compose_config(
+    config_value: str, overrides: Sequence[str] = (), config_prefix: str = "tasks"
+) -> DictConfig:
+    """Compose a task configuration outside a Hydra job.
+
+    Resolves the same bundled-or-filesystem config reference the CLI accepts,
+    so tooling that prepares or inspects runs sees exactly the configuration
+    a ``train`` invocation with the same arguments would.
+
+    Args:
+        config_value: Config name or YAML path as given on the command line.
+        overrides: Hydra overrides in command-line syntax.
+        config_prefix: Namespace prefix of the bundled task configs.
+
+    Returns:
+        The composed configuration without the ``hydra`` node.
+    """
+    return ConfigReference.resolve(config_value, config_prefix).compose(overrides)

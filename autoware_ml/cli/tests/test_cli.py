@@ -235,6 +235,74 @@ class TestCliCommands:
             config_prefix=cli.TASK_CONFIG_PREFIX,
         )
 
+    def test_tune_train_dispatches_with_batch_options(self) -> None:
+        with patch("autoware_ml.cli.cli.run_lazy_script") as run_lazy_script_mock:
+            result = self.runner.invoke(
+                app,
+                [
+                    "tune",
+                    "train",
+                    "--config-name",
+                    SAMPLE_CONFIG_NAME,
+                    "--n-trials",
+                    "4",
+                    "--gpus",
+                    "0,1",
+                    "tuning.storage=sqlite:///study.db",
+                ],
+            )
+
+        assert result.exit_code == 0, result.output
+        run_lazy_script_mock.assert_called_once_with(
+            cli.TUNE_ENTRYPOINT_MODULE,
+            "train_trials",
+            config_name=SAMPLE_CONFIG_NAME,
+            extra_args=["tuning.storage=sqlite:///study.db"],
+            n_trials=4,
+            gpus="0,1",
+        )
+
+    def test_tune_measure_and_status_forward_overrides(self) -> None:
+        with patch("autoware_ml.cli.cli.run_lazy_script") as run_lazy_script_mock:
+            measure = self.runner.invoke(
+                app,
+                ["tune", "measure", "--config-name", SAMPLE_CONFIG_NAME, "--frames", "5"],
+            )
+            status = self.runner.invoke(
+                app, ["tune", "status", "--config-name", SAMPLE_CONFIG_NAME, "seed=1"]
+            )
+            init = self.runner.invoke(app, ["tune", "init", "--config-name", SAMPLE_CONFIG_NAME])
+
+        assert measure.exit_code == 0, measure.output
+        assert status.exit_code == 0, status.output
+        assert init.exit_code == 0, init.output
+        run_lazy_script_mock.assert_any_call(
+            cli.TUNE_ENTRYPOINT_MODULE,
+            "measure_trials",
+            config_name=SAMPLE_CONFIG_NAME,
+            extra_args=[],
+            frames=5,
+            max_trials=None,
+        )
+        run_lazy_script_mock.assert_any_call(
+            cli.TUNE_ENTRYPOINT_MODULE,
+            "show_status",
+            config_name=SAMPLE_CONFIG_NAME,
+            extra_args=["seed=1"],
+        )
+        run_lazy_script_mock.assert_any_call(
+            cli.TUNE_ENTRYPOINT_MODULE,
+            "init_study",
+            config_name=SAMPLE_CONFIG_NAME,
+            extra_args=[],
+        )
+
+    def test_tune_train_rejects_a_zero_batch(self) -> None:
+        result = self.runner.invoke(
+            app, ["tune", "train", "--config-name", SAMPLE_CONFIG_NAME, "--n-trials", "0"]
+        )
+        assert result.exit_code != 0
+
     def test_train_runs_with_weights(self) -> None:
         with patch("autoware_ml.cli.cli.run_lazy_script") as run_lazy_script_mock:
             result = self.runner.invoke(
