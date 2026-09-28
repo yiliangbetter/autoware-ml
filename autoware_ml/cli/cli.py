@@ -73,12 +73,19 @@ session_app = typer.Typer(
     help="Managed background task sessions",
     no_args_is_help=True,
 )
+tune_app = typer.Typer(
+    name="tune",
+    cls=CompletableGroup,
+    help="Two-phase Optuna hyperparameter tuning: train trials in batches, measure them later",
+    no_args_is_help=True,
+)
 
 TASK_CONFIG_PREFIX = "tasks"
 TRAIN_ENTRYPOINT_MODULE = "autoware_ml.scripts.train"
 DEPLOY_ENTRYPOINT_MODULE = "autoware_ml.scripts.deploy"
 TEST_ENTRYPOINT_MODULE = "autoware_ml.scripts.test"
 VISUALIZE_ENTRYPOINT_MODULE = "autoware_ml.scripts.visualize"
+TUNE_ENTRYPOINT_MODULE = "autoware_ml.scripts.tune"
 CLI_RUNTIME_MODULE = "autoware_ml.cli.runtime"
 
 
@@ -839,6 +846,114 @@ def session_stop(
     run_lazy_script("autoware_ml.scripts.session", "stop_session", name=name)
 
 
+_TUNE_CONTEXT_SETTINGS = {"allow_extra_args": True, "ignore_unknown_options": True}
+_TUNE_CONFIG_OPTION = typer.Option(
+    "--config-name",
+    help="Tuning config name or YAML path (a config with a 'tuning' block)",
+    autocompletion=complete_task_config,
+)
+
+
+@tune_app.command(name="init", cls=OptionFirstTyperCommand, context_settings=_TUNE_CONTEXT_SETTINGS)
+def tune_init(
+    ctx: typer.Context,
+    config_name: Annotated[str, _TUNE_CONFIG_OPTION],
+) -> None:
+    """Create the study and queue its reference trials.
+
+    Args:
+        ctx: Typer context containing additional Hydra overrides.
+        config_name: Tuning config name or config file path.
+    """
+    run_lazy_script(
+        TUNE_ENTRYPOINT_MODULE, "init_study", config_name=config_name, extra_args=ctx.args
+    )
+
+
+@tune_app.command(
+    name="train", cls=OptionFirstTyperCommand, context_settings=_TUNE_CONTEXT_SETTINGS
+)
+def tune_train(
+    ctx: typer.Context,
+    config_name: Annotated[str, _TUNE_CONFIG_OPTION],
+    n_trials: Annotated[
+        int, typer.Option("--n-trials", min=1, help="Number of trials to train in this batch")
+    ] = 1,
+    gpus: Annotated[
+        str | None,
+        typer.Option(
+            "--gpus",
+            help="Comma-separated device ids, one concurrent training each (default: sequential)",
+        ),
+    ] = None,
+) -> None:
+    """Train a batch of new trials, one subprocess per device.
+
+    Args:
+        ctx: Typer context containing additional Hydra overrides.
+        config_name: Tuning config name or config file path.
+        n_trials: Number of trainings to launch.
+        gpus: Comma-separated device ids to run trainings on concurrently.
+    """
+    run_lazy_script(
+        TUNE_ENTRYPOINT_MODULE,
+        "train_trials",
+        config_name=config_name,
+        extra_args=ctx.args,
+        n_trials=n_trials,
+        gpus=gpus,
+    )
+
+
+@tune_app.command(
+    name="measure", cls=OptionFirstTyperCommand, context_settings=_TUNE_CONTEXT_SETTINGS
+)
+def tune_measure(
+    ctx: typer.Context,
+    config_name: Annotated[str, _TUNE_CONFIG_OPTION],
+    frames: Annotated[
+        int | None, typer.Option("--frames", min=1, help="Timed frames per trial (default: config)")
+    ] = None,
+    max_trials: Annotated[
+        int | None, typer.Option("--max-trials", min=1, help="Measure at most this many trials")
+    ] = None,
+) -> None:
+    """Validate and benchmark every trained trial, then report it to the sampler.
+
+    Args:
+        ctx: Typer context containing additional Hydra overrides.
+        config_name: Tuning config name or config file path.
+        frames: Timed frames per trial.
+        max_trials: Cap on trials measured in this call.
+    """
+    run_lazy_script(
+        TUNE_ENTRYPOINT_MODULE,
+        "measure_trials",
+        config_name=config_name,
+        extra_args=ctx.args,
+        frames=frames,
+        max_trials=max_trials,
+    )
+
+
+@tune_app.command(
+    name="status", cls=OptionFirstTyperCommand, context_settings=_TUNE_CONTEXT_SETTINGS
+)
+def tune_status(
+    ctx: typer.Context,
+    config_name: Annotated[str, _TUNE_CONFIG_OPTION],
+) -> None:
+    """Print the study's trials and its Pareto front.
+
+    Args:
+        ctx: Typer context containing additional Hydra overrides.
+        config_name: Tuning config name or config file path.
+    """
+    run_lazy_script(
+        TUNE_ENTRYPOINT_MODULE, "show_status", config_name=config_name, extra_args=ctx.args
+    )
+
+
 def main() -> None:
     """Run the top-level Typer application.
 
@@ -856,6 +971,7 @@ def main() -> None:
 
 app.add_typer(mlflow_app, name="mlflow")
 app.add_typer(session_app, name="session")
+app.add_typer(tune_app, name="tune")
 
 
 if __name__ == "__main__":
