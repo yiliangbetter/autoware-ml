@@ -192,16 +192,39 @@ class Job:
         if helper.exists():
             helper.unlink()
 
+    def failure_kind(self) -> str:
+        """Classify a failure: ``engine_build`` when the harness could not build the engines.
+
+        An engine that does not build on the target at the deployed profile
+        means the architecture cannot be deployed, which the study treats as a
+        verdict rather than as something to retry.
+        """
+        variant_state = self.state / "variants" / self.name
+        engines_log = variant_state / "engines" / "engines.log"
+        if self.stage == "bench" and engines_log.is_file():
+            text = engines_log.read_text(errors="replace")
+            if not (variant_state / "results" / self.tag).is_dir() and (
+                "Failed to setup" in text or "Error Code" in text
+            ):
+                return "engine_build"
+        return self.stage
+
     def failure_detail(self, exc: Exception) -> str:
+        """Summarize a failure, keeping the full harness logs beside the results."""
         parts = [str(exc)]
         variant_state = self.state / "variants" / self.name
+        keep = self.results / f"{self.tag}-failed"
+        keep.mkdir(parents=True, exist_ok=True)
         for candidate in (
             variant_state / "engines" / "engines.log",
             *sorted(variant_state.glob(f"results/{self.tag}/replicate-*/run.log")),
         ):
+            if not candidate.is_file():
+                continue
+            shutil.copyfile(candidate, keep / f"{candidate.parent.name}-{candidate.name}")
             tail = tail_file(candidate)
             if tail:
-                parts.append(f"--- {candidate}:\n{tail}")
+                parts.append(f"--- {candidate} (kept under {keep}):\n{tail}")
         return "\n".join(parts)
 
 
@@ -226,6 +249,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         report.update(
             {
                 "stage": job.stage,
+                "kind": job.failure_kind(),
                 "detail": job.failure_detail(exc),
                 "traceback": traceback.format_exc(),
             }

@@ -270,7 +270,7 @@ def test_status_lists_every_trial(context: TuningContext) -> None:
 import datetime as dt  # noqa: E402
 from zoneinfo import ZoneInfo  # noqa: E402
 
-from autoware_ml.tuning.bench import BenchMeasurement, BenchSettings  # noqa: E402
+from autoware_ml.tuning.bench import BenchJobError, BenchMeasurement, BenchSettings  # noqa: E402
 from autoware_ml.tuning.phases import (  # noqa: E402
     STATUS_BUDGET,
     drain_waiting_trials,
@@ -310,13 +310,18 @@ CLOSED = dt.datetime(2026, 9, 30, 12, 0, tzinfo=TOKYO)
 
 
 class _FakeRunner:
-    def __init__(self, latencies: dict[str, float] | None = None) -> None:
+    def __init__(
+        self, latencies: dict[str, float] | None = None, unbuildable: frozenset[str] = frozenset()
+    ) -> None:
         self.calls: list[str] = []
         self.latencies = latencies or BENCH_MS
+        self.unbuildable = unbuildable
 
     def measure(self, name, package_dir, description):
         self.calls.append(name)
         width = description.split("width_preset=")[1].split()[0]
+        if width in self.unbuildable:
+            raise BenchJobError("bench", "Failed to setup encoder TRT engine", kind="engine_build")
         latency = self.latencies[width]
         return BenchMeasurement(
             latency,
@@ -445,6 +450,38 @@ def test_screen_phase_measures_the_reference_first_and_applies_the_bound(
     )
     assert [o.status for o in again] == [STATUS_QUEUE_FULL]
     assert len(runner.calls) == len(measured)
+
+
+def test_unbuildable_architectures_are_told_infeasible(bench_context: TuningContext) -> None:
+    study = bench_context.study
+    space = bench_context.search_space
+    assert [t.number for t in drain_waiting_trials(bench_context)] == [0]
+    # An imported base-width cell with known accuracy, and a sampled one without.
+    study.enqueue_trial(
+        space.validate_params({**TINY, "width_preset": "base"}),
+        user_attrs={ATTR_PHASE: PHASE_IMPORTED, ATTR_METRICS: {MIOU: 0.69, DEBRIS: 0.40}},
+    )
+    imported = study.ask()
+    imported.set_user_attr(ATTR_OVERRIDES, list(space.suggest(imported).overrides))
+    runner = _FakeRunner(unbuildable=frozenset({"base"}))
+    outcomes = run_screen_phase(
+        bench_context, runner, now=OPEN, queue_target=0, exporter=_fake_exporter
+    )
+    statuses = {o.trial_number: o.status for o in outcomes if o.trial_number >= 0}
+    assert statuses[0] == STATUS_SCREENED and statuses[1] == STATUS_REJECTED
+    told = study.trials[1]
+    assert told.state == TrialState.COMPLETE and told.values == [pytest.approx(0.69)]
+    assert told.user_attrs[ATTR_CONSTRAINTS] == pytest.approx([-0.05, 100.0])
+    assert told.user_attrs[ATTR_PHASE] == PHASE_REJECTED
+    assert "do not build" in told.user_attrs[ATTR_ERROR]
+    assert not trial_is_feasible(told)
+    # A sampled base-width proposal is pruned with the same violation.
+    study.enqueue_trial(space.validate_params({**TINY, "width_preset": "base", "mlp_ratio": 2}))
+    run_screen_phase(bench_context, runner, now=OPEN, queue_target=0, exporter=_fake_exporter)
+    pruned = study.trials[2]
+    assert pruned.state == TrialState.PRUNED
+    assert pruned.user_attrs[ATTR_CONSTRAINTS] == pytest.approx([0.0, 100.0])
+    assert sum(v for v in pruned.system_attrs["constraints"] if v > 0) == pytest.approx(100.0)
 
 
 def test_contended_measurements_are_retried_not_told(bench_context: TuningContext) -> None:

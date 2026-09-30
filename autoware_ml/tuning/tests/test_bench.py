@@ -27,6 +27,7 @@ import pytest
 
 from autoware_ml.tuning.bench import (
     ML_PACKAGE_PLACEHOLDER,
+    BenchJobError,
     NODE_PARAM_NAME,
     VARIANT_TEMPLATE_NAME,
     BenchError,
@@ -250,3 +251,10 @@ def test_runner_stages_the_package_and_quotes_the_remote_command(tmp_path: Path)
     assert argv[argv.index("--replicates") + 1] == "7"
     assert "--keep-variant" not in argv
     assert (tmp_path / "exchange" / "jobs" / "bench_job.py").is_file()
+
+
+def test_job_errors_classify_engine_build_failures() -> None:
+    error = BenchJobError("bench", "Failed to setup encoder TRT engine", kind="engine_build")
+    assert error.unbuildable and error.stage == "bench"
+    assert not BenchJobError("ingest", "permission denied").unbuildable
+    assert BenchJobError("bench", "container died").kind == "bench"

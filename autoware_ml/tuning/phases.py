@@ -43,7 +43,7 @@ import optuna
 from omegaconf import DictConfig, OmegaConf
 from optuna.trial import FrozenTrial, TrialState
 
-from autoware_ml.tuning.bench import BenchError, BenchRunner, BenchSettings
+from autoware_ml.tuning.bench import BenchError, BenchJobError, BenchRunner, BenchSettings
 from autoware_ml.tuning.export import load_manifest
 from autoware_ml.tuning.latency import LatencyReport, benchmark_latency, forward_inputs
 from autoware_ml.tuning.search_space import LitePTSearchSpace, TrialProposal
@@ -830,6 +830,13 @@ def screen_trial(
         package_dir = exporter(context, trial)
         description = f"{study.study_name} trial {trial.number}: {_describe_params(trial)}"
         measurement = runner.measure(name, package_dir, description)
+    except BenchJobError as exc:
+        if exc.unbuildable:
+            return reject_unbuildable(context, trial, exc)
+        detail = f"{type(exc).__name__}: {exc}"
+        live.set_user_attr(ATTR_ERROR, detail)
+        logger.exception("Trial %d: bench measurement failed", trial.number)
+        return ScreenOutcome(trial.number, STATUS_SKIPPED, detail)
     except (BenchError, Exception) as exc:  # noqa: BLE001 - keep screening the rest
         detail = f"{type(exc).__name__}: {exc}"
         live.set_user_attr(ATTR_ERROR, detail)
@@ -906,6 +913,40 @@ def drain_waiting_trials(context: TuningContext) -> list[FrozenTrial]:
         trial, _ = result
         asked.append(study._storage.get_trial(trial._trial_id))
     return asked
+
+
+def reject_unbuildable(
+    context: TuningContext, trial: FrozenTrial, error: BenchJobError
+) -> ScreenOutcome:
+    """Tell an architecture whose engines do not build on the target as infeasible.
+
+    It cannot be deployed, so this is a verdict rather than a failure to
+    retry: the latency constraint takes a large violation, an imported trial
+    keeps its known accuracy, a sampled one is pruned. Either way the sampler
+    learns to stay away from that region.
+    """
+    assert context.bench is not None
+    study = context.study
+    live = _running_trial(study, trial)
+    reason = "engines do not build on the target: " + error.detail.splitlines()[0][:200]
+    live.set_user_attr(ATTR_ERROR, reason)
+    metrics = trial.user_attrs.get(ATTR_METRICS)
+    violations = []
+    for constraint in context.constraints:
+        if constraint.source == "latency":
+            violations.append(context.bench.unbuildable_violation_ms)
+        elif metrics is not None and constraint.metric in metrics:
+            violations.append(constraint.violation(float(metrics[constraint.metric])))
+        else:
+            violations.append(0.0)
+    _set_attrs(live, {ATTR_CONSTRAINTS: violations, ATTR_PHASE: PHASE_REJECTED})
+    latency_objective = any(objective.source == "latency" for objective in context.objectives)
+    if metrics is not None and not latency_objective:
+        values = objective_values(context.objectives, metrics, None)
+        study.tell(trial.number, values)
+        return ScreenOutcome(trial.number, STATUS_REJECTED, f"{reason}; told {values}")
+    study.tell(trial.number, state=TrialState.PRUNED)
+    return ScreenOutcome(trial.number, STATUS_REJECTED, reason)
 
 
 def pending_screen_trials(context: TuningContext) -> list[FrozenTrial]:
