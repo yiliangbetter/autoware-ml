@@ -287,6 +287,7 @@ import optuna  # noqa: E402
 
 from autoware_ml.tuning.study import (  # noqa: E402
     ATTR_BENCH,
+    ATTR_BENCH_ATTEMPTS,
     ATTR_IMPORT,
     count_trained_here,
     ATTR_LATENCY_LIMIT,
@@ -444,6 +445,29 @@ def test_screen_phase_measures_the_reference_first_and_applies_the_bound(
     )
     assert [o.status for o in again] == [STATUS_QUEUE_FULL]
     assert len(runner.calls) == len(measured)
+
+
+def test_contended_measurements_are_retried_not_told(bench_context: TuningContext) -> None:
+    settings = bench_context.bench
+    assert settings is not None
+    context = TuningContext(
+        **{
+            **bench_context.__dict__,
+            "bench": settings.__class__(**{**settings.__dict__, "max_ci95_ms": 0.01}),
+        }
+    )
+    runner = _FakeRunner()  # every fake measurement carries a 0.05 ms interval
+    outcomes = run_screen_phase(context, runner, now=OPEN, n_trials=1, exporter=_fake_exporter)
+    assert outcomes[0].status == STATUS_SKIPPED and "contended" in outcomes[0].detail
+    trial = context.study.trials[0]
+    assert trial.state == TrialState.RUNNING and ATTR_BENCH not in trial.user_attrs
+    assert trial.user_attrs[ATTR_BENCH_ATTEMPTS] == 1
+    # The second attempt fails the trial for good: max_attempts is 2 in the fixture.
+    again = run_screen_phase(context, runner, now=OPEN, n_trials=1, exporter=_fake_exporter)
+    assert again[0].status == STATUS_SKIPPED
+    final = run_screen_phase(context, runner, now=OPEN, n_trials=1, exporter=_fake_exporter)
+    assert final[0].status == STATUS_FAILED
+    assert context.study.trials[0].state == TrialState.FAIL
 
 
 def test_screen_phase_honours_the_window(bench_context: TuningContext) -> None:

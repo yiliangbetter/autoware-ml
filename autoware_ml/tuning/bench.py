@@ -352,6 +352,8 @@ class BenchSettings:
         max_attempts: Bench attempts per trial before it is failed.
         keep_variants: Leave the variant file in the harness repository.
         keep_packages: Leave the package in the exchange after measuring.
+        max_ci95_ms: Widest replicate confidence interval accepted; a wider
+            one means the bench was contended and the measurement is retried.
     """
 
     host: str
@@ -376,6 +378,7 @@ class BenchSettings:
     max_attempts: int
     keep_variants: bool
     keep_packages: bool
+    max_ci95_ms: float | None = None
 
     @classmethod
     def from_config(cls, cfg: DictConfig | Mapping[str, Any] | None) -> BenchSettings | None:
@@ -417,6 +420,7 @@ class BenchSettings:
             max_attempts=int(job.get("max_attempts", 2)),
             keep_variants=bool(job.get("keep_variants", False)),
             keep_packages=bool(job.get("keep_packages", True)),
+            max_ci95_ms=None if plain.get("max_ci95_ms") is None else float(plain["max_ci95_ms"]),
         )
 
     @property
