@@ -835,6 +835,15 @@ def screen_trial(
         live.set_user_attr(ATTR_ERROR, detail)
         logger.exception("Trial %d: bench measurement failed", trial.number)
         return ScreenOutcome(trial.number, STATUS_SKIPPED, detail)
+    limit_ci = context.bench.max_ci95_ms
+    if limit_ci is not None and measurement.ci95_ms > limit_ci:
+        detail = (
+            f"replicate spread +-{measurement.ci95_ms:.2f} ms exceeds {limit_ci:.2f} ms; "
+            "the bench was probably contended, measuring again later"
+        )
+        live.set_user_attr(ATTR_ERROR, detail)
+        logger.warning("Trial %d: %s", trial.number, detail)
+        return ScreenOutcome(trial.number, STATUS_SKIPPED, detail, measurement.latency_ms)
     live.set_user_attr(ATTR_BENCH, measurement.to_dict())
     latency = measurement.latency_ms
     is_reference = trial.user_attrs.get(ATTR_REFERENCE) == context.bench.reference

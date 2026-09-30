@@ -116,6 +116,9 @@ tuning:
     replicates: 7
     metric: gpu_total_ms
     statistic: replicate_median_mean
+    # The bench is shared: a replicate interval wider than this means another
+    # job ran alongside, so the measurement is repeated instead of told.
+    max_ci95_ms: 0.3
     reference: litept_tiny
     # The bench belongs to someone else during the day.
     # 18:00 needs quotes or YAML reads it as a sexagesimal integer; 09:00 does not.
@@ -124,7 +127,7 @@ tuning:
     # proposal sees the freshest results, and fill it before the window
     # closes with enough trials to keep the trainer busy until it reopens.
     queue: { target: 3, target_before_close: 10, close_buffer_hours: 2.5 }
-    job: { timeout_s: 3600, max_attempts: 2, keep_variants: false, keep_packages: true }
+    job: { timeout_s: 3600, max_attempts: 3, keep_variants: false, keep_packages: true }
   # Optuna's terminator on the feasible trials: stop once the regret bound a
   # Gaussian process puts on the remaining improvement falls under the
   # error. The error is two standard deviations of the run-to-run mIoU
