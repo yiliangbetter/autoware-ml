@@ -62,13 +62,29 @@ class BenchError(RuntimeError):
     """A bench measurement could not be completed."""
 
 
-class BenchJobError(BenchError):
-    """The bench-side job reported a failure."""
+ENGINE_BUILD_FAILURE = "engine_build"
 
-    def __init__(self, stage: str, detail: str) -> None:
+
+class BenchJobError(BenchError):
+    """The bench-side job reported a failure.
+
+    Attributes:
+        stage: Job stage that failed.
+        detail: What the job reported, with the harness log tails.
+        kind: Failure class; ``engine_build`` means the engines did not build
+            on the target, which is a verdict on the architecture.
+    """
+
+    def __init__(self, stage: str, detail: str, kind: str | None = None) -> None:
         super().__init__(f"bench job failed at {stage}: {detail}")
         self.stage = stage
         self.detail = detail
+        self.kind = kind or stage
+
+    @property
+    def unbuildable(self) -> bool:
+        """Whether the architecture's engines could not be built on the target."""
+        return self.kind == ENGINE_BUILD_FAILURE
 
 
 def _parse_time(value: str) -> dt.time:
@@ -354,6 +370,9 @@ class BenchSettings:
         keep_packages: Leave the package in the exchange after measuring.
         max_ci95_ms: Widest replicate confidence interval accepted; a wider
             one means the bench was contended and the measurement is retried.
+        unbuildable_violation_ms: Latency violation recorded for an
+            architecture whose engines do not build on the target, so the
+            sampler treats it as far outside the bound.
     """
 
     host: str
@@ -379,6 +398,7 @@ class BenchSettings:
     keep_variants: bool
     keep_packages: bool
     max_ci95_ms: float | None = None
+    unbuildable_violation_ms: float = 100.0
 
     @classmethod
     def from_config(cls, cfg: DictConfig | Mapping[str, Any] | None) -> BenchSettings | None:
@@ -421,6 +441,7 @@ class BenchSettings:
             keep_variants=bool(job.get("keep_variants", False)),
             keep_packages=bool(job.get("keep_packages", True)),
             max_ci95_ms=None if plain.get("max_ci95_ms") is None else float(plain["max_ci95_ms"]),
+            unbuildable_violation_ms=float(plain.get("unbuildable_violation_ms", 100.0)),
         )
 
     @property
@@ -724,7 +745,11 @@ class SshBenchRunner:
                 "ssh", f"no report from the bench (exit {completed.returncode}), see {log_path}"
             )
         if report.get("status") != "ok":
-            raise BenchJobError(str(report.get("stage", "?")), str(report.get("detail", "")))
+            raise BenchJobError(
+                str(report.get("stage", "?")),
+                str(report.get("detail", "")),
+                kind=None if report.get("kind") is None else str(report["kind"]),
+            )
         result_dir = settings.results_dir / name / series
         result_files = sorted(result_dir.glob("replicate-*/result.json"))
         if not result_files:

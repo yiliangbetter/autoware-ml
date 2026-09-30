@@ -119,6 +119,9 @@ tuning:
     # The bench is shared: a replicate interval wider than this means another
     # job ran alongside, so the measurement is repeated instead of told.
     max_ci95_ms: 0.3
+    # An architecture whose engines do not build on the target at the deployed
+    # profile cannot be deployed: it is told as infeasible with this violation.
+    unbuildable_violation_ms: 100.0
     reference: litept_tiny
     # The bench belongs to someone else during the day.
     # 18:00 needs quotes or YAML reads it as a sexagesimal integer; 09:00 does not.
