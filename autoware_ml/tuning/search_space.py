@@ -62,6 +62,8 @@ PARAM_NAMES = (
     PARAM_ROPE_BASE,
     PARAM_STEM,
 )
+# The categorical parameters every space samples; ``rope_base`` is optional.
+CATEGORICAL_PARAM_NAMES = tuple(name for name in PARAM_NAMES if name != PARAM_ROPE_BASE)
 
 
 def _format_value(value: Any) -> str:
@@ -112,8 +114,11 @@ class LitePTSearchSpace:
     """Sample LitePT architectures and translate them into Hydra overrides.
 
     Every list argument is the set of allowed values for the corresponding
-    categorical parameter; the rotary base is drawn log-uniformly from its
-    range. Narrow a study by editing the lists in config, not the code.
+    categorical parameter. The rotary base is drawn log-uniformly from
+    ``rope_base_range`` when one is given; with ``None`` it is not searched
+    and the model config's default applies, which the rope ablation of
+    2026-09-29 showed to be the right call (mIoU flat over two decades).
+    Narrow a study by editing the lists in config, not the code.
     """
 
     def __init__(
@@ -125,7 +130,7 @@ class LitePTSearchSpace:
         dec_depth_presets: Sequence[str] = ("none", "light"),
         patch_sizes: Sequence[int] = (256, 512, 1024),
         mlp_ratios: Sequence[int] = (2, 3, 4),
-        rope_base_range: Sequence[float] = (10.0, 1000.0),
+        rope_base_range: Sequence[float] | None = None,
         stem_types: Sequence[str] = ("linear", "conv"),
         conv_stem_kernel_size: int = 3,
         encoder_key: str = "model.encoder",
@@ -143,7 +148,8 @@ class LitePTSearchSpace:
             patch_sizes: Allowed attention patch sizes, applied to every
                 attention stage of the encoder and the decoder.
             mlp_ratios: Allowed MLP expansion ratios.
-            rope_base_range: ``(low, high)`` of the log-uniform rotary base.
+            rope_base_range: ``(low, high)`` of the log-uniform rotary base,
+                or ``None`` to leave the base at the config default.
             stem_types: Allowed embedding stems.
             conv_stem_kernel_size: Kernel size used when the conv stem is drawn.
             encoder_key: Config path of the encoder node.
@@ -163,15 +169,39 @@ class LitePTSearchSpace:
         )
         self.patch_sizes = tuple(int(value) for value in patch_sizes)
         self.mlp_ratios = tuple(int(value) for value in mlp_ratios)
-        low, high = (float(value) for value in rope_base_range)
-        if not 0 < low < high:
-            raise ValueError(f"rope_base_range must satisfy 0 < low < high, got {low}, {high}.")
-        self.rope_base_range = (low, high)
+        self.rope_base_range: tuple[float, float] | None = None
+        if rope_base_range is not None:
+            low, high = (float(value) for value in rope_base_range)
+            if not 0 < low < high:
+                raise ValueError(f"rope_base_range must satisfy 0 < low < high, got {low}, {high}.")
+            self.rope_base_range = (low, high)
         self.stem_types = tuple(_check_names(stem_types, dict.fromkeys(STEM_TYPES), "stem"))
         self.conv_stem_kernel_size = int(conv_stem_kernel_size)
         self.encoder_key = encoder_key
         self.head_key = head_key
         self.in_channels = int(in_channels)
+
+    @property
+    def searches_rope_base(self) -> bool:
+        """Whether the rotary base is a sampled parameter of this space."""
+        return self.rope_base_range is not None
+
+    @property
+    def param_names(self) -> tuple[str, ...]:
+        """Names of the parameters this space samples, in ``PARAM_NAMES`` order."""
+        return tuple(
+            name for name in PARAM_NAMES if name != PARAM_ROPE_BASE or self.searches_rope_base
+        )
+
+    def cell_key(self, params: Mapping[str, Any]) -> tuple[tuple[str, Any], ...]:
+        """Return a hashable identity of the categorical cell ``params`` falls in.
+
+        The rotary base is excluded on purpose: it is continuous, and the
+        ablation showed it does not separate architectures, so trials that
+        differ only in it are replicates of one cell.
+        """
+        normalized = self.validate_params(params)
+        return tuple((name, normalized[name]) for name in CATEGORICAL_PARAM_NAMES)
 
     def suggest(self, trial: optuna.Trial) -> TrialProposal:
         """Draw one configuration from the trial and expand it.
@@ -196,9 +226,12 @@ class LitePTSearchSpace:
             ),
             PARAM_PATCH_SIZE: trial.suggest_categorical(PARAM_PATCH_SIZE, list(self.patch_sizes)),
             PARAM_MLP_RATIO: trial.suggest_categorical(PARAM_MLP_RATIO, list(self.mlp_ratios)),
-            PARAM_ROPE_BASE: trial.suggest_float(PARAM_ROPE_BASE, *self.rope_base_range, log=True),
             PARAM_STEM: trial.suggest_categorical(PARAM_STEM, list(self.stem_types)),
         }
+        if self.rope_base_range is not None:
+            params[PARAM_ROPE_BASE] = trial.suggest_float(
+                PARAM_ROPE_BASE, *self.rope_base_range, log=True
+            )
         return self.proposal_from_params(params)
 
     def validate_params(self, params: Mapping[str, Any]) -> dict[str, Any]:
@@ -213,14 +246,14 @@ class LitePTSearchSpace:
         Raises:
             ValueError: If a name is unknown, missing, or outside the space.
         """
-        unknown = sorted(set(params) - set(PARAM_NAMES))
-        missing = sorted(set(PARAM_NAMES) - set(params))
+        expected = set(self.param_names)
+        unknown = sorted(set(params) - expected)
+        missing = sorted(expected - set(params))
         if unknown or missing:
             raise ValueError(
-                f"Reference trial parameters mismatch the search space: unknown={unknown}, "
-                f"missing={missing}."
+                f"Trial parameters mismatch the search space: unknown={unknown}, missing={missing}."
             )
-        normalized = {
+        normalized: dict[str, Any] = {
             PARAM_GRID_SIZE: float(params[PARAM_GRID_SIZE]),
             PARAM_WIDTH: str(params[PARAM_WIDTH]),
             PARAM_CONV_DEPTH: str(params[PARAM_CONV_DEPTH]),
@@ -228,9 +261,10 @@ class LitePTSearchSpace:
             PARAM_DEC_DEPTH: str(params[PARAM_DEC_DEPTH]),
             PARAM_PATCH_SIZE: int(params[PARAM_PATCH_SIZE]),
             PARAM_MLP_RATIO: int(params[PARAM_MLP_RATIO]),
-            PARAM_ROPE_BASE: float(params[PARAM_ROPE_BASE]),
             PARAM_STEM: str(params[PARAM_STEM]),
         }
+        if self.rope_base_range is not None:
+            normalized[PARAM_ROPE_BASE] = float(params[PARAM_ROPE_BASE])
         choices = {
             PARAM_GRID_SIZE: self.grid_sizes,
             PARAM_WIDTH: self.width_presets,
@@ -246,11 +280,12 @@ class LitePTSearchSpace:
                 raise ValueError(
                     f"{name}={normalized[name]!r} is not one of the allowed values {allowed}."
                 )
-        low, high = self.rope_base_range
-        if not low <= normalized[PARAM_ROPE_BASE] <= high:
-            raise ValueError(
-                f"{PARAM_ROPE_BASE}={normalized[PARAM_ROPE_BASE]} is outside [{low}, {high}]."
-            )
+        if self.rope_base_range is not None:
+            low, high = self.rope_base_range
+            if not low <= normalized[PARAM_ROPE_BASE] <= high:
+                raise ValueError(
+                    f"{PARAM_ROPE_BASE}={normalized[PARAM_ROPE_BASE]} is outside [{low}, {high}]."
+                )
         return normalized
 
     def proposal_from_params(self, params: Mapping[str, Any]) -> TrialProposal:
@@ -290,7 +325,6 @@ class LitePTSearchSpace:
             format_override(f"{enc}.enc_depths", depths),
             format_override(f"{enc}.enc_patch_size", (patch,) * STAGE_COUNT),
             format_override(f"{enc}.mlp_ratio", params[PARAM_MLP_RATIO]),
-            format_override(f"{enc}.enc_rope_base", params[PARAM_ROPE_BASE]),
             # The stem keys are constructor defaults the shipped configs do
             # not declare, so they are force-added rather than overridden.
             format_override(f"{enc}.stem_type", params[PARAM_STEM], force_add=True),
@@ -299,6 +333,8 @@ class LitePTSearchSpace:
             format_override(f"{head}.dec_depths", DEC_DEPTH_PRESETS[params[PARAM_DEC_DEPTH]]),
             format_override(f"{head}.dec_patch_size", (patch,) * DECODER_STAGE_COUNT),
         ]
+        if PARAM_ROPE_BASE in params:
+            overrides.append(format_override(f"{enc}.enc_rope_base", params[PARAM_ROPE_BASE]))
         if params[PARAM_STEM] == CONV_STEM:
             overrides.append(
                 format_override(

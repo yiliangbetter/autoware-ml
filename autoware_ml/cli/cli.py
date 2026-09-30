@@ -76,7 +76,7 @@ session_app = typer.Typer(
 tune_app = typer.Typer(
     name="tune",
     cls=CompletableGroup,
-    help="Two-phase Optuna hyperparameter tuning: train trials in batches, measure them later",
+    help="Batched Optuna hyperparameter tuning: screen trials on the bench, train them, measure them",
     no_args_is_help=True,
 )
 
@@ -871,6 +871,117 @@ def tune_init(
 
 
 @tune_app.command(
+    name="import", cls=OptionFirstTyperCommand, context_settings=_TUNE_CONTEXT_SETTINGS
+)
+def tune_import(
+    ctx: typer.Context,
+    config_name: Annotated[str, _TUNE_CONFIG_OPTION],
+    from_storage: Annotated[
+        list[str],
+        typer.Option("--from-storage", help="Optuna storage URL of a source study (repeatable)"),
+    ],
+    from_study: Annotated[
+        list[str], typer.Option("--from-study", help="Name of a source study, one per storage")
+    ],
+) -> None:
+    """Import the measured trials of earlier studies, one trial per architecture.
+
+    Args:
+        ctx: Typer context containing additional Hydra overrides.
+        config_name: Tuning config name or config file path.
+        from_storage: Optuna storage URLs of the source studies.
+        from_study: Names of the source studies, one per storage.
+    """
+    run_lazy_script(
+        TUNE_ENTRYPOINT_MODULE,
+        "import_study",
+        config_name=config_name,
+        extra_args=ctx.args,
+        from_storage=from_storage,
+        from_study=from_study,
+    )
+
+
+@tune_app.command(
+    name="screen", cls=OptionFirstTyperCommand, context_settings=_TUNE_CONTEXT_SETTINGS
+)
+def tune_screen(
+    ctx: typer.Context,
+    config_name: Annotated[str, _TUNE_CONFIG_OPTION],
+    n_trials: Annotated[
+        int | None,
+        typer.Option("--n-trials", min=1, help="Measure at most this many trials in this call"),
+    ] = None,
+    queue_target: Annotated[
+        int | None,
+        typer.Option(
+            "--queue-target",
+            min=0,
+            help="Screened trials to keep waiting for training (default: the config's policy)",
+        ),
+    ] = None,
+    ignore_window: Annotated[
+        bool, typer.Option("--ignore-window", help="Use the bench outside its window")
+    ] = False,
+    ignore_termination: Annotated[
+        bool,
+        typer.Option("--ignore-termination", help="Ask for new trials after termination"),
+    ] = False,
+) -> None:
+    """Time trials on the bench with their initial weights and queue the fast ones.
+
+    Args:
+        ctx: Typer context containing additional Hydra overrides.
+        config_name: Tuning config name or config file path.
+        n_trials: Cap on bench measurements in this call.
+        queue_target: Screened trials to keep waiting for training.
+        ignore_window: Use the bench outside its configured window.
+        ignore_termination: Keep asking for trials after the study terminated.
+    """
+    run_lazy_script(
+        TUNE_ENTRYPOINT_MODULE,
+        "screen_trials",
+        config_name=config_name,
+        extra_args=ctx.args,
+        n_trials=n_trials,
+        queue_target=queue_target,
+        ignore_window=ignore_window,
+        ignore_termination=ignore_termination,
+    )
+
+
+@tune_app.command(
+    name="export", cls=OptionFirstTyperCommand, context_settings=_TUNE_CONTEXT_SETTINGS
+)
+def tune_export(
+    ctx: typer.Context,
+    config_name: Annotated[str, _TUNE_CONFIG_OPTION],
+    trial: Annotated[
+        int | None, typer.Option("--trial", min=0, help="Trial number to export")
+    ] = None,
+    reference: Annotated[
+        str | None, typer.Option("--reference", help="Reference trial name to export")
+    ] = None,
+) -> None:
+    """Export one trial's bench package with its initial weights, without measuring it.
+
+    Args:
+        ctx: Typer context containing additional Hydra overrides.
+        config_name: Tuning config name or config file path.
+        trial: Trial number to export.
+        reference: Reference trial name to export instead of a number.
+    """
+    run_lazy_script(
+        TUNE_ENTRYPOINT_MODULE,
+        "export_trial",
+        config_name=config_name,
+        extra_args=ctx.args,
+        trial=trial,
+        reference=reference,
+    )
+
+
+@tune_app.command(
     name="train", cls=OptionFirstTyperCommand, context_settings=_TUNE_CONTEXT_SETTINGS
 )
 def tune_train(
@@ -886,14 +997,21 @@ def tune_train(
             help="Comma-separated device ids, one concurrent training each (default: sequential)",
         ),
     ] = None,
+    ignore_termination: Annotated[
+        bool, typer.Option("--ignore-termination", help="Train after the study terminated")
+    ] = False,
 ) -> None:
-    """Train a batch of new trials, one subprocess per device.
+    """Train a batch of trials, one subprocess per device.
+
+    With a bench configured the trials come from the screened queue;
+    otherwise the sampler is asked for new ones.
 
     Args:
         ctx: Typer context containing additional Hydra overrides.
         config_name: Tuning config name or config file path.
         n_trials: Number of trainings to launch.
         gpus: Comma-separated device ids to run trainings on concurrently.
+        ignore_termination: Train even after the study was terminated.
     """
     run_lazy_script(
         TUNE_ENTRYPOINT_MODULE,
@@ -902,6 +1020,7 @@ def tune_train(
         extra_args=ctx.args,
         n_trials=n_trials,
         gpus=gpus,
+        ignore_termination=ignore_termination,
     )
 
 
@@ -943,7 +1062,7 @@ def tune_status(
     ctx: typer.Context,
     config_name: Annotated[str, _TUNE_CONFIG_OPTION],
 ) -> None:
-    """Print the study's trials and its Pareto front.
+    """Print the study's trials, its best feasible trial and the termination verdict.
 
     Args:
         ctx: Typer context containing additional Hydra overrides.

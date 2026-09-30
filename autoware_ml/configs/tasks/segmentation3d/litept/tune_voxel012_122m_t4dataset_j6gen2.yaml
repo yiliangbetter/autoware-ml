@@ -21,14 +21,18 @@ t4dataset:
 tuning:
   study_name: litept_seg3d_voxel012_122m_t4dataset_j6gen2
   storage: sqlite:///mlruns/optuna/litept_seg3d_voxel012_122m_t4dataset_j6gen2.db
+  # Trainings the study pays for; screened-out and imported trials are free.
+  max_trained_trials: 80
   # Trained trials are measured later, so the sampler must not re-propose a
-  # configuration that is still training: constant_liar treats running
-  # trials as poor until they report.
+  # configuration that is still in flight: constant_liar treats running
+  # trials as poor until they report. No seed: a fixed seed together with a
+  # fresh process per batch re-drew the same random-phase proposals in the
+  # first study.
   sampler:
     _target_: optuna.samplers.TPESampler
-    seed: 42
     multivariate: true
     constant_liar: true
+    n_startup_trials: 10
   search_space:
     _target_: autoware_ml.tuning.search_space.LitePTSearchSpace
     grid_sizes: [0.10, 0.12, 0.14, 0.16, 0.18]
@@ -38,32 +42,107 @@ tuning:
     dec_depth_presets: [none, light]
     patch_sizes: [256, 512, 1024]
     mlp_ratios: [2, 3, 4]
-    rope_base_range: [10.0, 1000.0]
+    # The rotary base stays at the config default: the ablation of 2026-09-29
+    # found mIoU flat over 10..1000, inside the replicate noise.
+    rope_base_range: null
     stem_types: [linear, conv]
     conv_stem_kernel_size: 3
+  # One objective. Latency is a constraint rather than a second objective:
+  # the question is the most accurate model that is no slower than the
+  # deployed one, not a trade-off curve.
   objectives:
-    - { name: latency_ms, direction: minimize, source: latency }
-    - { name: val/seg3d/mIoU, direction: maximize, source: metric }
-    - { name: val/seg3d/recall_debris, direction: maximize, source: metric }
-  # Soft bound the sampler is told about; a trial below it still reports its
-  # objectives so nothing measured is thrown away.
+    - { name: val/seg3d/mIoU, direction: maximize }
+  # Bounds the sampler is told about. A trial outside them keeps its value,
+  # so nothing measured is discarded, but it never counts as the best. The
+  # debris bound is 0.35 rather than the PTv3 study's 0.40 because the
+  # first study measured a +-0.06 replicate spread on that recall: 0.40
+  # rejected the best architecture two runs in seven for reasons that had
+  # nothing to do with the architecture. The latency bound is relative to
+  # the reference trial measured by the same harness on the same bench.
   constraints:
-    - { metric: val/seg3d/recall_debris, min: 0.4 }
-  # Reject a proposal before it spends a training slot; null disables.
+    - { metric: val/seg3d/recall_debris, min: 0.35 }
+    - { source: latency, name: latency_ms, reference: litept_tiny, margin_ms: 0.1 }
+  # Reject a proposal before it spends anything; null disables.
   static_filter:
     max_encoder_params: null
-  # Eager PyTorch proxy for the deployed latency; fp32 ranks architectures
-  # the same way and avoids the spconv fp16 tuner failure seen under autocast.
+  # The eager PyTorch proxy on the training GPU. With a bench configured it
+  # is recorded for comparison only; without one it is the study's latency.
   latency:
+    proxy: true
     frames: 50
     warmup: 10
     repeats: 5
     precision: fp32
+  # Deployed latency, measured on the bench before a trial trains. The
+  # package carries the model's initial weights: a TensorRT engine's timing
+  # depends on the graph and the input cloud, not on the weight values.
+  bench:
+    enabled: true
+    host: sensing-bench.local
+    user: yiliang-liu
+    ssh_key: ~/.ssh/litept_bench
+    ssh_options: []
+    # A directory both machines mount: packages go in, results come back.
+    exchange:
+      local: /nas_litept/bench
+      remote: /mnt/fdd_nas/Benchmarks/yiliang/LitePT_hyperparameter_tunning/bench
+    # The inference benchmark harness on the bench and how it is invoked.
+    harness:
+      repo: /mnt/fdd_nas/Benchmarks/yiliang/ptv3-inference-benchmarks
+      state_dir: /var/tmp/bench-state
+      command: export PATH=$HOME/.local/bin:$PATH UV_PROJECT_ENVIRONMENT=/var/tmp/bench-venv BENCH_STATE_DIR=/var/tmp/bench-state && uv sync --frozen -q && uv run --frozen
+      python: python3
+    # The harness variant every trial is measured as. The universe ref is
+    # the merge of the PR that binds only the encoder inputs the artifact
+    # declares (LitePT exposes a subset of PTv3's) on top of the one that
+    # takes the level-0 serialization order as a graph input, which is the
+    # export contract of this repository; adapter v12 is that API generation.
+    variant:
+      prefix: lt2
+      firmware: oss-universe-devel-cuda-20260902
+      adapter: v12
+      sources:
+        autoware_universe: autowarefoundation/autoware_universe@1e561dfe87645188916de3d5eaa472de1afb0a5e
+        autoware_core: autowarefoundation/autoware_core@85e3732770dda1dacfe2c68fe304a4cc509fb987
+      mcap: assets/mcaps/sample_pointcloud.mcap
+      # Node parameters travel inside the package (see node_param_template),
+      # so a class mapping that covers this dataset's twenty classes applies.
+      node_param: ptv3.param.yaml
+      params: [ml_package_ptv3.param.yaml]
+      vars: { model_variant: ptv3, use_seg3d_head: "true", use_det3d_head: "false" }
+      warmup: 10
+      iterations: 50
+    node_param_template: null
+    replicates: 7
+    metric: gpu_total_ms
+    statistic: replicate_median_mean
+    reference: litept_tiny
+    # The bench belongs to someone else during the day.
+    # 18:00 needs quotes or YAML reads it as a sexagesimal integer; 09:00 does not.
+    window: { start: "18:00", end: 09:00, timezone: Asia/Tokyo }
+    # Keep the training queue short while the bench is open so every
+    # proposal sees the freshest results, and fill it before the window
+    # closes with enough trials to keep the trainer busy until it reopens.
+    queue: { target: 3, target_before_close: 10, close_buffer_hours: 2.5 }
+    job: { timeout_s: 3600, max_attempts: 2, keep_variants: false, keep_packages: true }
+  # Optuna's terminator on the feasible trials: stop once the regret bound a
+  # Gaussian process puts on the remaining improvement falls under the
+  # error. The error is two standard deviations of the run-to-run mIoU
+  # noise the first study measured (sigma 0.0021 over seven replicates):
+  # an improvement smaller than that is not resolvable at this budget.
+  terminator:
+    enabled: true
+    improvement: regret_bound
+    error: static
+    constant: 0.004
+    min_n_trials: 20
+    top_trials_ratio: 0.5
+    feasible_only: true
   measure:
     max_attempts: 3
   train_overrides: []
-  # Known-good parametrizations queued first, so the study can reproduce
-  # what it is asked to beat. Values must lie inside the search space.
+  # The known-good parametrization the study has to beat and that anchors
+  # the latency bound. Values must lie inside the search space.
   reference_trials:
     litept_tiny:
       grid_size: 0.12
@@ -73,15 +152,4 @@ tuning:
       dec_depth_preset: light
       patch_size: 512
       mlp_ratio: 4
-      rope_base: 100.0
-      stem_type: linear
-    litept_base:
-      grid_size: 0.12
-      width_preset: base
-      conv_depth_preset: 2-2-2
-      attn_depth_preset: 6-2
-      dec_depth_preset: none
-      patch_size: 1024
-      mlp_ratio: 4
-      rope_base: 100.0
       stem_type: linear
