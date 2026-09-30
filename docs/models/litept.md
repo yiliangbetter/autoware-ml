@@ -72,10 +72,13 @@ autoware-ml train --config-name segmentation3d/litept/t4dataset/voxel012_tiny_b1
 ## Hyperparameter tuning
 
 `segmentation3d/litept/tune_voxel012_122m_t4dataset_j6gen2` defines a
-two-phase Optuna study over the LitePT architecture, driven by the `tune`
-commands described in [Optuna](../user-guide/optuna.md#two-phase-batch-tuning).
+batched Optuna study over the LitePT architecture, driven by the `tune`
+commands described in
+[Optuna](../user-guide/optuna.md#batched-tuning-with-a-bench-in-the-loop).
 Every trial trains a fixed 12 epochs without early stopping, so the study
-compares architectures rather than schedules.
+compares architectures rather than schedules, and every trial is timed on
+the target ECU with its initial weights before it trains, so no training is
+spent on an architecture that is too slow.
 
 ### Search space
 
@@ -93,8 +96,15 @@ embedding rotates the whole head.
 | `dec_depth_preset`  | none, light                      | Decoder blocks: unpooling only, or PTv3-tiny's two attention blocks.                                                                                                                                                          |
 | `patch_size`        | 256, 512, 1024                   | Attention window at the attention stages and in the decoder. Past the stage's point count the window is already global.                                                                                                       |
 | `mlp_ratio`         | 2, 3, 4                          | Feed-forward expansion. Only attention blocks carry an MLP, so this touches the two deepest stages alone.                                                                                                                     |
-| `rope_base`         | 10 to 1000, log-uniform          | Base of the rotary frequency ladder. The fastest rung is fixed at one radian per voxel; the base sets how far the slowest reaches.                                                                                            |
 | `stem_type`         | linear, conv                     | Embedding stem; the convolution stem uses a 3x3x3 kernel.                                                                                                                                                                     |
+
+The rotary base is not searched. The first study sampled it log-uniformly
+over 10 to 1000, and a five-point ablation on the best architecture found
+mIoU flat across those two decades, inside the replicate noise: attention
+runs only at the two coarsest stages, whose grid coordinates span a few
+dozen voxels, so bases above a few tens only idle low-frequency channels.
+It stays at the config default of 100; `rope_base_range` in the search
+space config re-enables it.
 
 Deliberately fixed: the gating (which stages convolve and which attend), the
 serialization orders, and the regularization and numerics settings
@@ -105,18 +115,36 @@ longer than a trial's. `drop_path`, which now interacts with depth, and
 `shuffle_orders`, since training sees four orders while deployment reads two,
 are candidates for a follow-up study once an architecture is chosen.
 
-### Objectives
+### Objective and constraints
 
-Latency is minimized while mIoU and debris recall are maximized. Debris
-recall below 0.4 marks a trial infeasible, so the Pareto front never holds a
-model that lost the class, while the trial's values still inform the sampler.
+The study maximizes mIoU under two constraints. Debris recall below 0.35
+marks a trial infeasible: the class is the small-object proxy, and the bound
+sits 1.5 standard deviations of the run-to-run noise below the best
+architecture of the first study, where 0.4 rejected that architecture two
+runs in seven. Deployed latency above the reference trial's plus 0.1 ms
+marks a trial infeasible as well; the reference is LitePT-tiny, measured by
+the same harness on the same bench, so the question the study answers is the
+most accurate model that is no slower than the deployed one. An infeasible
+trial keeps its value for the sampler but never counts as the best.
+
+Latency is measured before training with the model's initial weights, on
+the ADM-AL30 bench through the `ptv3-inference-benchmarks` harness, seven
+replicates of fifty inference cycles each. A trial over the bound is told to
+the sampler as pruned with its violation, so the sampler learns where the
+bound runs at the cost of a few bench minutes instead of an hour of training.
+
 Per-class metrics are only broken out at test by default, so the tuning config
 sets the dataset's `detail_stages` to `[val, test]` to log them every epoch.
-LitePT-tiny and LitePT-base are queued as reference trials.
+With a single objective the study stops itself: Optuna's terminator bounds
+the improvement a further trial could bring with a Gaussian process over the
+feasible trials and stops once that bound falls under 0.004 mIoU, two
+standard deviations of the replicate noise.
 
 ```bash
 autoware-ml tune init --config-name segmentation3d/litept/tune_voxel012_122m_t4dataset_j6gen2
-autoware-ml tune train --config-name segmentation3d/litept/tune_voxel012_122m_t4dataset_j6gen2 --n-trials 8 --gpus 0,1
+autoware-ml tune import --config-name segmentation3d/litept/tune_voxel012_122m_t4dataset_j6gen2 --from-storage sqlite:///mlruns/litept_tune/optuna.db --from-study litept_seg3d_j6gen2_v1
+autoware-ml tune screen --config-name segmentation3d/litept/tune_voxel012_122m_t4dataset_j6gen2
+autoware-ml tune train --config-name segmentation3d/litept/tune_voxel012_122m_t4dataset_j6gen2 --n-trials 1
 autoware-ml tune measure --config-name segmentation3d/litept/tune_voxel012_122m_t4dataset_j6gen2
 autoware-ml tune status --config-name segmentation3d/litept/tune_voxel012_122m_t4dataset_j6gen2
 ```
@@ -141,7 +169,7 @@ is future work.
 | `autoware_ml/models/segmentation3d/ptv3_base.py`      | `PTv3EncoderExportBase`, shared export inputs |
 | `autoware_ml/models/segmentation3d/heads/ptv3.py`     | Decoder gating (`dec_conv`, `dec_attn`)       |
 | `autoware_ml/configs/tasks/*/litept/`                 | Experiment configurations                     |
-| `autoware_ml/tuning/`                                 | Presets, search space, and tuning phases      |
+| `autoware_ml/tuning/`                                 | Presets, search space, bench, tuning phases   |
 | `autoware_ml/models/detection3d/tests/test_litept.py` | Rotary, gating, and export tests              |
 
 ## Acknowledgment

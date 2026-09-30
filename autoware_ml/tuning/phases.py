@@ -12,17 +12,22 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""The two phases of a batched study: train trials, then measure them.
+"""The phases of a batched study: screen, train, measure.
 
-The train phase asks the sampler for configurations and launches one
-training subprocess per trial, each in its own pre-created MLflow run so
-the trial knows its run and checkpoint before training starts. The measure
-phase re-validates each best checkpoint, benchmarks its latency, and only
-then tells the sampler the full objective vector.
+The screen phase asks the sampler for configurations, exports each with its
+initial weights and times it on the bench; a trial slower than the latency
+bound is told to the sampler as infeasible right there, the others queue up
+for training. The train phase launches one training subprocess per queued
+trial, each in its own pre-created MLflow run. The measure phase
+re-validates each best checkpoint and only then tells the sampler the
+objective, together with every constraint. Without a bench configured, the
+train phase asks the sampler itself and the measure phase times the trial
+with the eager proxy, as the first study did.
 """
 
 from __future__ import annotations
 
+import datetime as dt
 import logging
 import os
 import subprocess
@@ -38,31 +43,50 @@ import optuna
 from omegaconf import DictConfig, OmegaConf
 from optuna.trial import FrozenTrial, TrialState
 
+from autoware_ml.tuning.bench import BenchError, BenchRunner, BenchSettings
+from autoware_ml.tuning.export import load_manifest
 from autoware_ml.tuning.latency import LatencyReport, benchmark_latency, forward_inputs
 from autoware_ml.tuning.search_space import LitePTSearchSpace, TrialProposal
 from autoware_ml.tuning.study import (
+    ATTR_BENCH,
+    ATTR_BENCH_ATTEMPTS,
     ATTR_CHECKPOINT,
     ATTR_CONSTRAINTS,
     ATTR_ERROR,
     ATTR_HYDRA_DIR,
     ATTR_LATENCY,
+    ATTR_LATENCY_LIMIT,
     ATTR_MEASURE_ATTEMPTS,
     ATTR_METRICS,
     ATTR_OVERRIDES,
+    ATTR_PACKAGE,
     ATTR_PHASE,
     ATTR_REFERENCE,
     ATTR_RUN_ID,
     ATTR_STATIC,
     ATTR_TRAIN_LOG,
+    ATTR_TRAINED_HERE,
     PHASE_ASKED,
+    PHASE_IMPORTED,
     PHASE_MEASURED,
+    PHASE_REJECTED,
+    PHASE_SCREENED,
     PHASE_TRAINED,
+    STUDY_ATTR_TERMINATION,
     Constraint,
     Objective,
+    best_feasible_trial,
     constraint_values,
+    count_trained_here,
+    find_reference_trial,
+    latency_constraints,
     objective_values,
+    reference_latency_ms,
+    trial_bench_latency_ms,
+    trial_is_feasible,
     trials_in_phase,
 )
+from autoware_ml.tuning.terminator import StudyTerminator, study_terminated
 from autoware_ml.utils.mlflow_helpers import (
     AUTOWARE_ML_HYDRA_RUN_DIR_ENV,
     AUTOWARE_ML_RUN_ID_ENV,
@@ -76,8 +100,8 @@ logger = logging.getLogger(__name__)
 TRAIN_ENTRYPOINT_MODULE = "autoware_ml.scripts.train"
 BEST_CHECKPOINT_NAME = "best.ckpt"
 CUDA_VISIBLE_DEVICES_ENV = "CUDA_VISIBLE_DEVICES"
-# Measurement runs one trial on one device; the study's own parallelism is
-# across trials, never inside one.
+# Measurement and export run one trial on one device; the study's own
+# parallelism is across trials, never inside one.
 MEASURE_OVERRIDES = ("trainer.devices=1",)
 BENCHMARK_OVERRIDES = (
     "datamodule.val_dataloader_cfg.batch_size=1",
@@ -90,6 +114,13 @@ STATUS_MEASURED = "measured"
 STATUS_FAILED = "failed"
 STATUS_PRUNED = "pruned"
 STATUS_SKIPPED = "skipped"
+STATUS_SCREENED = "screened"
+STATUS_REJECTED = "rejected"
+STATUS_WINDOW_CLOSED = "window_closed"
+STATUS_QUEUE_FULL = "queue_full"
+STATUS_TERMINATED = "terminated"
+STATUS_BUDGET = "budget_reached"
+STATUS_IDLE = "idle"
 
 
 @dataclass(frozen=True)
@@ -105,7 +136,9 @@ class TuningContext:
         objectives: Study objectives in order.
         constraints: Study constraints.
         study: The open study.
-        log_dir: Directory receiving per-trial training logs.
+        log_dir: Directory receiving per-trial logs.
+        bench: Bench settings, or ``None`` for the proxy-only workflow.
+        terminator: Termination criterion, or ``None`` to run to the budget.
     """
 
     config: ConfigReference
@@ -116,6 +149,8 @@ class TuningContext:
     constraints: tuple[Constraint, ...]
     study: optuna.Study
     log_dir: Path
+    bench: BenchSettings | None = None
+    terminator: StudyTerminator | None = None
 
     @property
     def config_name(self) -> str:
@@ -132,6 +167,17 @@ class TuningContext:
         """The MLflow tracking URI trials log to."""
         return str(self.cfg.logger.tracking_uri)
 
+    @property
+    def bench_mode(self) -> bool:
+        """Whether trials are screened on the bench before training."""
+        return self.bench is not None
+
+    @property
+    def max_trained_trials(self) -> int | None:
+        """Cap on trainings this study pays for, if configured."""
+        value = self.tuning.get("max_trained_trials")
+        return None if value is None else int(value)
+
     def train_overrides(self) -> list[str]:
         """Fixed overrides the config applies to every trial's training."""
         return [str(value) for value in self.tuning.get("train_overrides") or []]
@@ -139,6 +185,11 @@ class TuningContext:
     def trial_overrides(self, trial_overrides: Sequence[str], *extra: str) -> list[str]:
         """Order the override layers: trial, then config, then command line."""
         return [*trial_overrides, *self.train_overrides(), *self.extra_overrides, *extra]
+
+    def package_dir(self, trial_number: int) -> Path:
+        """Directory an exported package of a trial lands in."""
+        assert self.bench is not None
+        return self.bench.packages_dir / self.bench.variant.variant_name(trial_number)
 
 
 @dataclass(frozen=True)
@@ -238,15 +289,11 @@ def build_train_command(context: TuningContext, overrides: Sequence[str]) -> tup
     return tuple(argv)
 
 
-def prepare_trial_launch(
-    context: TuningContext,
-    gpu: str | None = None,
-    extra_train_overrides: Sequence[str] = (),
-) -> TrainLaunch | None:
-    """Ask the sampler for a trial and prepare its training run.
+def ask_trial(context: TuningContext) -> tuple[optuna.Trial, TrialProposal] | None:
+    """Ask the sampler for a configuration and record it on the trial.
 
-    A trial rejected by the static filter is told as pruned and ``None`` is
-    returned, so the caller can ask again without spending a training slot.
+    A proposal rejected by the static filter is told as pruned and ``None``
+    is returned, so the caller can ask again without spending anything.
     """
     study = context.study
     trial = study.ask()
@@ -265,7 +312,17 @@ def prepare_trial_launch(
         study.tell(trial, state=TrialState.PRUNED)
         logger.info("Trial %d pruned before training: %s", trial.number, reason)
         return None
+    return trial, proposal
 
+
+def prepare_launch(
+    context: TuningContext,
+    trial: optuna.Trial,
+    gpu: str | None = None,
+    extra_train_overrides: Sequence[str] = (),
+) -> TrainLaunch:
+    """Prepare the training run of an asked or screened trial."""
+    study = context.study
     reference = trial.user_attrs.get(ATTR_REFERENCE)
     run_context = prepare_run_context(
         context.tracking_uri,
@@ -278,7 +335,7 @@ def prepare_trial_launch(
             "optuna_reference": reference or "",
         },
     )
-    overrides = context.trial_overrides(proposal.overrides, *extra_train_overrides)
+    overrides = context.trial_overrides(trial.user_attrs[ATTR_OVERRIDES], *extra_train_overrides)
     env = dict(os.environ)
     env[AUTOWARE_ML_RUN_ID_ENV] = run_context.run_id
     env[AUTOWARE_ML_HYDRA_RUN_DIR_ENV] = str(run_context.hydra_dir)
@@ -291,6 +348,7 @@ def prepare_trial_launch(
             ATTR_RUN_ID: run_context.run_id,
             ATTR_HYDRA_DIR: str(run_context.hydra_dir),
             ATTR_TRAIN_LOG: str(log_path),
+            ATTR_TRAINED_HERE: True,
         },
     )
     return TrainLaunch(
@@ -303,6 +361,19 @@ def prepare_trial_launch(
         log_path=log_path,
         gpu=gpu,
     )
+
+
+def prepare_trial_launch(
+    context: TuningContext,
+    gpu: str | None = None,
+    extra_train_overrides: Sequence[str] = (),
+) -> TrainLaunch | None:
+    """Ask the sampler for a trial and prepare its training run (proxy workflow)."""
+    asked = ask_trial(context)
+    if asked is None:
+        return None
+    trial, _ = asked
+    return prepare_launch(context, trial, gpu, extra_train_overrides)
 
 
 def static_rejection(context: TuningContext, proposal: TrialProposal) -> str | None:
@@ -337,6 +408,28 @@ def finish_trial_launch(
     return TrialOutcome(trial.number, STATUS_TRAINED, str(checkpoint))
 
 
+def tell_known_trials(context: TuningContext) -> list[TrialOutcome]:
+    """Tell screened trials whose accuracy was imported instead of training them."""
+    outcomes = []
+    for frozen in trials_in_phase(context.study, PHASE_SCREENED):
+        metrics = frozen.user_attrs.get(ATTR_METRICS)
+        if metrics is None:
+            continue
+        values = tell_measured(context, frozen, metrics)
+        told = context.study._storage.get_trial(frozen._trial_id)
+        status = STATUS_MEASURED if trial_is_feasible(told) else STATUS_REJECTED
+        outcomes.append(TrialOutcome(frozen.number, status, f"imported accuracy, told {values}"))
+    return outcomes
+
+
+def training_budget_left(context: TuningContext) -> int | None:
+    """Return how many trainings the budget still allows, ``None`` for unlimited."""
+    cap = context.max_trained_trials
+    if cap is None:
+        return None
+    return max(0, cap - count_trained_here(context.study))
+
+
 def run_train_phase(
     context: TuningContext,
     *,
@@ -346,8 +439,12 @@ def run_train_phase(
     launcher: Launcher = launch_subprocess,
     poll_interval: float = 5.0,
     max_asks: int | None = None,
+    ignore_termination: bool = False,
 ) -> list[TrialOutcome]:
-    """Train ``n_trials`` new trials, one subprocess per device slot.
+    """Train ``n_trials`` trials, one subprocess per device slot.
+
+    With a bench configured the trials come from the screened queue in
+    order; otherwise the sampler is asked for new ones.
 
     Args:
         context: The study context.
@@ -358,29 +455,50 @@ def run_train_phase(
         launcher: Starts a prepared launch; injectable for tests.
         poll_interval: Seconds between completion polls.
         max_asks: Cap on sampler asks, bounding static rejections.
+        ignore_termination: Train even after the study was terminated.
 
     Returns:
-        One outcome per trial that was asked.
+        One outcome per trial that was considered.
     """
     if n_trials <= 0:
         return []
-    slots: deque[str | None] = deque(gpus) if gpus else deque([None])
     if gpus and len(set(gpus)) != len(gpus):
         raise ValueError(f"Duplicate device ids in {list(gpus)}.")
+    if not ignore_termination and study_terminated(context.study):
+        return [TrialOutcome(-1, STATUS_TERMINATED, "the study was terminated")]
+    budget = training_budget_left(context)
+    if budget is not None:
+        if budget == 0:
+            return [TrialOutcome(-1, STATUS_BUDGET, f"{context.max_trained_trials} trainings")]
+        n_trials = min(n_trials, budget)
+    slots: deque[str | None] = deque(gpus) if gpus else deque([None])
     ask_budget = max_asks if max_asks is not None else 10 * n_trials
-    running: list[tuple[TrainLaunch, TrialProcess]] = []
     outcomes: list[TrialOutcome] = []
+    queue = None
+    if context.bench_mode:
+        outcomes.extend(tell_known_trials(context))
+        queue = deque(trials_in_phase(context.study, PHASE_SCREENED))
+    running: list[tuple[TrainLaunch, TrialProcess]] = []
     launched = 0
     asked = 0
     while True:
         while slots and launched < n_trials and asked < ask_budget:
-            asked += 1
             gpu = slots.popleft()
-            launch = prepare_trial_launch(context, gpu, extra_train_overrides)
-            if launch is None:
-                slots.appendleft(gpu)
-                outcomes.append(TrialOutcome(asked - 1, STATUS_PRUNED, "static filter"))
-                continue
+            if queue is not None:
+                if not queue:
+                    slots.appendleft(gpu)
+                    break
+                frozen = queue.popleft()
+                launch = prepare_launch(
+                    context, _running_trial(context.study, frozen), gpu, extra_train_overrides
+                )
+            else:
+                asked += 1
+                launch = prepare_trial_launch(context, gpu, extra_train_overrides)
+                if launch is None:
+                    slots.appendleft(gpu)
+                    outcomes.append(TrialOutcome(asked - 1, STATUS_PRUNED, "static filter"))
+                    continue
             logger.info(
                 "Trial %d: training on %s, log %s",
                 launch.trial_number,
@@ -404,15 +522,17 @@ def run_train_phase(
         running = still_running
         if running:
             time.sleep(poll_interval)
+    if queue is not None and not any(o.status in (STATUS_TRAINED, STATUS_FAILED) for o in outcomes):
+        outcomes.append(TrialOutcome(-1, STATUS_IDLE, "no screened trial is waiting"))
     return outcomes
 
 
 @dataclass(frozen=True)
 class TrialEvaluation:
-    """Accuracy and latency of one trained trial."""
+    """Accuracy and, optionally, proxy latency of one trained trial."""
 
     metrics: dict[str, float]
-    latency: LatencyReport
+    latency: LatencyReport | None = None
 
 
 Evaluator = Callable[[TuningContext, FrozenTrial, Mapping[str, Any]], TrialEvaluation]
@@ -421,7 +541,7 @@ Evaluator = Callable[[TuningContext, FrozenTrial, Mapping[str, Any]], TrialEvalu
 def evaluate_trial(
     context: TuningContext, trial: FrozenTrial, latency_settings: Mapping[str, Any]
 ) -> TrialEvaluation:
-    """Re-validate a trial's best checkpoint and benchmark its latency.
+    """Re-validate a trial's best checkpoint and, if enabled, time it eagerly.
 
     Validation runs with the trial's own configuration on one device, so the
     reported accuracy belongs to the checkpoint the latency belongs to.
@@ -461,6 +581,8 @@ def evaluate_trial(
     )
     trainer.validate(model, datamodule=datamodule, verbose=False)
     metrics = {str(key): float(value) for key, value in trainer.callback_metrics.items()}
+    if not latency_settings.get("proxy", True):
+        return TrialEvaluation(metrics=metrics)
 
     benchmark_cfg = context.config.compose([*overrides, *BENCHMARK_OVERRIDES])
     benchmark_datamodule = hydra.utils.instantiate(benchmark_cfg.datamodule)
@@ -502,6 +624,28 @@ def encoder_stage_counter(model: Any) -> Callable[[Mapping[str, Any]], Sequence[
     return count
 
 
+def trial_latency_ms(context: TuningContext, trial: FrozenTrial) -> float | None:
+    """The latency the objectives and constraints read: bench first, proxy otherwise."""
+    if context.bench_mode:
+        return trial_bench_latency_ms(trial)
+    proxy = trial.user_attrs.get(ATTR_LATENCY)
+    return None if not proxy else float(proxy["mean_ms"])
+
+
+def tell_measured(
+    context: TuningContext, trial: FrozenTrial, metrics: Mapping[str, float]
+) -> list[float]:
+    """Tell the sampler a trial's objectives and constraints from its stored data."""
+    latency = trial_latency_ms(context, trial)
+    reference = reference_latency_ms(context.study, context.constraints)
+    values = objective_values(context.objectives, metrics, latency)
+    violations = constraint_values(context.constraints, metrics, latency, reference)
+    live = _running_trial(context.study, trial)
+    _set_attrs(live, {ATTR_CONSTRAINTS: violations, ATTR_PHASE: PHASE_MEASURED})
+    context.study.tell(trial.number, values)
+    return values
+
+
 def record_measurement(
     context: TuningContext, trial: FrozenTrial, evaluation: TrialEvaluation
 ) -> list[float]:
@@ -510,20 +654,13 @@ def record_measurement(
     Returns:
         The objective values told.
     """
-    values = objective_values(context.objectives, evaluation.metrics, evaluation.latency.mean_ms)
-    violations = constraint_values(context.constraints, evaluation.metrics)
     live = _running_trial(context.study, trial)
-    _set_attrs(
-        live,
-        {
-            ATTR_METRICS: evaluation.metrics,
-            ATTR_LATENCY: evaluation.latency.to_dict(),
-            ATTR_CONSTRAINTS: violations,
-            ATTR_PHASE: PHASE_MEASURED,
-        },
-    )
-    context.study.tell(trial.number, values)
-    return values
+    attrs: dict[str, Any] = {ATTR_METRICS: dict(evaluation.metrics)}
+    if evaluation.latency is not None:
+        attrs[ATTR_LATENCY] = evaluation.latency.to_dict()
+    _set_attrs(live, attrs)
+    frozen = context.study._storage.get_trial(trial._trial_id)
+    return tell_measured(context, frozen, evaluation.metrics)
 
 
 def log_measurement_to_mlflow(
@@ -537,9 +674,12 @@ def log_measurement_to_mlflow(
         from mlflow.tracking import MlflowClient
 
         client = MlflowClient(tracking_uri=resolve_tracking_uri(context.tracking_uri))
-        report = evaluation.latency
-        client.log_metric(run_id, "tune/latency_mean_ms", report.mean_ms)
-        client.log_metric(run_id, "tune/latency_p95_ms", report.p95_ms)
+        if evaluation.latency is not None:
+            client.log_metric(run_id, "tune/proxy_latency_mean_ms", evaluation.latency.mean_ms)
+            client.log_metric(run_id, "tune/proxy_latency_p95_ms", evaluation.latency.p95_ms)
+        bench = trial.user_attrs.get(ATTR_BENCH)
+        if bench:
+            client.log_metric(run_id, "tune/bench_latency_ms", float(bench["latency_ms"]))
         for objective, value in zip(context.objectives, values, strict=True):
             client.log_metric(run_id, f"tune/objective/{objective.name}", value)
         client.set_tag(run_id, "optuna_phase", PHASE_MEASURED)
@@ -558,7 +698,8 @@ def run_measure_phase(
     """Measure every trained trial and report it to the sampler.
 
     A trial whose evaluation raises stays trained so a later run can retry it,
-    up to ``max_attempts`` after which it fails.
+    up to ``max_attempts`` after which it fails. After the batch the
+    termination criterion, if configured, is evaluated and recorded.
 
     Args:
         context: The study context.
@@ -566,7 +707,7 @@ def run_measure_phase(
         max_trials: Cap on trials measured in this call.
         max_attempts: Evaluation attempts before a trial is failed; defaults
             to the config's ``measure.max_attempts`` or 3.
-        latency_overrides: Benchmark settings overriding the config's.
+        latency_overrides: Proxy benchmark settings overriding the config's.
 
     Returns:
         One outcome per trial considered.
@@ -614,11 +755,287 @@ def run_measure_phase(
         )
         logger.info("Trial %d: %s", frozen.number, detail)
         outcomes.append(TrialOutcome(frozen.number, STATUS_MEASURED, detail))
+    if context.terminator is not None and any(o.status == STATUS_MEASURED for o in outcomes):
+        report = context.terminator.check_and_record(context.study, context.objectives[0])
+        logger.info("Termination check: %s", report.reason)
     return outcomes
 
 
+# --------------------------------------------------------------------------
+# Screen phase
+
+
+@dataclass(frozen=True)
+class ScreenOutcome(TrialOutcome):
+    """A screen outcome carries the latency it measured."""
+
+    latency_ms: float | None = None
+    limit_ms: float | None = None
+
+
+def export_trial_package(context: TuningContext, trial: FrozenTrial) -> Path:
+    """Export the trial's package unless a complete one already exists."""
+    from autoware_ml.tuning.export import export_package
+
+    if trial.state == TrialState.WAITING:
+        drain_waiting_trials(context)
+        trial = context.study._storage.get_trial(trial._trial_id)
+    package_dir = context.package_dir(trial.number)
+    manifest = load_manifest(package_dir)
+    if manifest is None:
+        overrides = context.trial_overrides(trial.user_attrs[ATTR_OVERRIDES], *MEASURE_OVERRIDES)
+        cfg = context.config.compose(overrides)
+        logger.info("Trial %d: exporting package to %s", trial.number, package_dir)
+        export_package(
+            cfg,
+            package_dir,
+            config_name=context.config_name,
+            params=dict(trial.params),
+            overrides=overrides,
+        )
+    _running_trial(context.study, trial).set_user_attr(ATTR_PACKAGE, str(package_dir))
+    return package_dir
+
+
+def _describe_params(trial: FrozenTrial) -> str:
+    return " ".join(f"{key}={_short(value)}" for key, value in sorted(trial.params.items()))
+
+
+def screen_trial(
+    context: TuningContext,
+    trial: FrozenTrial,
+    runner: BenchRunner,
+    *,
+    exporter: Callable[[TuningContext, FrozenTrial], Path] = export_trial_package,
+) -> ScreenOutcome:
+    """Time one trial on the bench and act on the latency bound.
+
+    An imported trial is told outright, since its accuracy is known. A
+    sampled trial slower than the bound is told as pruned with its violation
+    so the sampler learns where the bound runs; a faster one joins the
+    training queue. The reference trial passes by definition.
+    """
+    assert context.bench is not None
+    study = context.study
+    live = _running_trial(study, trial)
+    attempts = int(trial.user_attrs.get(ATTR_BENCH_ATTEMPTS, 0))
+    if attempts >= context.bench.max_attempts:
+        detail = f"bench failed {attempts} times: {trial.user_attrs.get(ATTR_ERROR, '')}"
+        live.set_user_attr(ATTR_ERROR, detail)
+        study.tell(trial.number, state=TrialState.FAIL)
+        return ScreenOutcome(trial.number, STATUS_FAILED, detail)
+    live.set_user_attr(ATTR_BENCH_ATTEMPTS, attempts + 1)
+    name = context.bench.variant.variant_name(trial.number)
+    try:
+        package_dir = exporter(context, trial)
+        description = f"{study.study_name} trial {trial.number}: {_describe_params(trial)}"
+        measurement = runner.measure(name, package_dir, description)
+    except (BenchError, Exception) as exc:  # noqa: BLE001 - keep screening the rest
+        detail = f"{type(exc).__name__}: {exc}"
+        live.set_user_attr(ATTR_ERROR, detail)
+        logger.exception("Trial %d: bench measurement failed", trial.number)
+        return ScreenOutcome(trial.number, STATUS_SKIPPED, detail)
+    live.set_user_attr(ATTR_BENCH, measurement.to_dict())
+    latency = measurement.latency_ms
+    is_reference = trial.user_attrs.get(ATTR_REFERENCE) == context.bench.reference
+    reference = latency if is_reference else reference_latency_ms(study, context.constraints)
+    limit = None
+    for constraint in latency_constraints(context.constraints):
+        limit = constraint.upper_bound(reference)
+    if limit is not None:
+        live.set_user_attr(ATTR_LATENCY_LIMIT, limit)
+    metrics = trial.user_attrs.get(ATTR_METRICS)
+    if metrics is not None:
+        frozen = study._storage.get_trial(trial._trial_id)
+        values = tell_measured(context, frozen, metrics)
+        told = study._storage.get_trial(trial._trial_id)
+        status = STATUS_MEASURED if trial_is_feasible(told) else STATUS_REJECTED
+        detail = f"{latency:.2f} ms" + (f" (limit {limit:.2f})" if limit is not None else "")
+        detail += f", told {values}"
+        return ScreenOutcome(trial.number, status, detail, latency, limit)
+    violations = constraint_values(
+        context.constraints, {}, latency, reference, unknown_metric_violation=0.0
+    )
+    if any(value > 0.0 for value in violations):
+        _set_attrs(
+            live,
+            {
+                ATTR_CONSTRAINTS: violations,
+                ATTR_PHASE: PHASE_REJECTED,
+                ATTR_ERROR: f"latency {latency:.2f} ms exceeds the bound {limit:.2f} ms",
+            },
+        )
+        study.tell(trial.number, state=TrialState.PRUNED)
+        return ScreenOutcome(
+            trial.number,
+            STATUS_REJECTED,
+            f"{latency:.2f} ms > {limit:.2f} ms",
+            latency,
+            limit,
+        )
+    live.set_user_attr(ATTR_PHASE, PHASE_SCREENED)
+    detail = f"{latency:.2f} ms" + (f" <= {limit:.2f} ms" if limit is not None else "")
+    return ScreenOutcome(trial.number, STATUS_SCREENED, detail, latency, limit)
+
+
+def drain_waiting_trials(context: TuningContext) -> list[FrozenTrial]:
+    """Ask the sampler for every queued trial so it carries its overrides.
+
+    Reference trials are queued by ``tune init`` with fixed parameters; the
+    sampler returns them in order before proposing anything of its own.
+
+    Returns:
+        The trials asked, as frozen views.
+    """
+    study = context.study
+    asked: list[FrozenTrial] = []
+    waiting = study.get_trials(deepcopy=False, states=(TrialState.WAITING,))
+    for _ in waiting:
+        result = ask_trial(context)
+        if result is None:
+            continue
+        trial, _ = result
+        asked.append(study._storage.get_trial(trial._trial_id))
+    return asked
+
+
+def pending_screen_trials(context: TuningContext) -> list[FrozenTrial]:
+    """Running trials that have no bench latency yet: the reference first, then by number."""
+    assert context.bench is not None
+    pending = [
+        trial
+        for trial in context.study.get_trials(deepcopy=False, states=(TrialState.RUNNING,))
+        if trial.user_attrs.get(ATTR_PHASE) in (PHASE_IMPORTED, PHASE_ASKED, None)
+        and ATTR_OVERRIDES in trial.user_attrs
+        and trial.user_attrs.get(ATTR_BENCH) is None
+    ]
+    pending.sort(key=lambda trial: trial.number)
+    reference = context.bench.reference
+    pending.sort(key=lambda trial: 0 if trial.user_attrs.get(ATTR_REFERENCE) == reference else 1)
+    return pending
+
+
+def screened_queue_length(context: TuningContext) -> int:
+    """Number of latency-feasible trials waiting for training."""
+    return len(trials_in_phase(context.study, PHASE_SCREENED))
+
+
+def run_screen_phase(
+    context: TuningContext,
+    runner: BenchRunner,
+    *,
+    n_trials: int | None = None,
+    queue_target: int | None = None,
+    now: dt.datetime | None = None,
+    ignore_window: bool = False,
+    ignore_termination: bool = False,
+    exporter: Callable[[TuningContext, FrozenTrial], Path] = export_trial_package,
+    max_asks: int | None = None,
+) -> list[TrialOutcome]:
+    """Screen trials on the bench until the queue target or the window is reached.
+
+    The reference trial goes first because the latency bound derives from
+    it; then every trial that already exists without a bench latency; then
+    new proposals while the training queue is below its target.
+
+    Args:
+        context: The study context, with a bench configured.
+        runner: Bench runner.
+        n_trials: Cap on bench measurements in this call.
+        queue_target: Queue length to reach; defaults to the policy's.
+        now: Current time, injectable for tests.
+        ignore_window: Screen outside the bench window.
+        ignore_termination: Ask for new trials after the study was terminated.
+        exporter: Produces a trial's package; injectable for tests.
+        max_asks: Cap on sampler asks, bounding static rejections.
+
+    Returns:
+        One outcome per trial considered.
+    """
+    settings = context.bench
+    if settings is None:
+        raise ValueError("The screen phase needs a bench configured under tuning.bench.")
+    study = context.study
+    window = settings.window
+    current = (
+        now if now is not None else (window.now() if window else dt.datetime.now().astimezone())
+    )
+    if window is not None and not ignore_window and not window.contains(current):
+        return [
+            TrialOutcome(
+                -1,
+                STATUS_WINDOW_CLOSED,
+                f"bench window {window.describe()} opens at {window.opens_at(current):%Y-%m-%d %H:%M}",
+            )
+        ]
+    if find_reference_trial(study, settings.reference) is None:
+        raise ValueError(
+            f"Reference trial {settings.reference!r} is not in the study; run tune init or tune "
+            "import first."
+        )
+    outcomes: list[TrialOutcome] = []
+    measured = 0
+    limit_measurements = n_trials if n_trials is not None else 10**9
+    drain_waiting_trials(context)
+    outcomes.extend(tell_known_trials(context))
+
+    def window_open() -> bool:
+        if ignore_window or window is None:
+            return True
+        return window.contains(window.now() if now is None else current)
+
+    for trial in pending_screen_trials(context):
+        if measured >= limit_measurements or not window_open():
+            break
+        outcomes.append(screen_trial(context, trial, runner, exporter=exporter))
+        measured += 1
+    if reference_latency_ms(study, context.constraints) is None and latency_constraints(
+        context.constraints
+    ):
+        outcomes.append(TrialOutcome(-1, STATUS_SKIPPED, "the reference latency is still unknown"))
+        return outcomes
+    target = queue_target if queue_target is not None else settings.queue.target_at(window, current)
+    terminated = study_terminated(study) is not None and not ignore_termination
+    if terminated:
+        outcomes.append(TrialOutcome(-1, STATUS_TERMINATED, "the study was terminated"))
+        return outcomes
+    budget = training_budget_left(context)
+    if budget is not None:
+        target = min(target, budget)
+    asks = 0
+    ask_budget = max_asks if max_asks is not None else 10 * max(1, target)
+    while (
+        screened_queue_length(context) < target
+        and measured < limit_measurements
+        and asks < ask_budget
+        and window_open()
+    ):
+        asks += 1
+        asked = ask_trial(context)
+        if asked is None:
+            outcomes.append(TrialOutcome(-1, STATUS_PRUNED, "static filter"))
+            continue
+        trial, _ = asked
+        frozen = study._storage.get_trial(trial._trial_id)
+        outcomes.append(screen_trial(context, frozen, runner, exporter=exporter))
+        measured += 1
+    if screened_queue_length(context) >= target and not any(
+        o.status in (STATUS_SCREENED, STATUS_REJECTED) for o in outcomes
+    ):
+        outcomes.append(
+            TrialOutcome(
+                -1, STATUS_QUEUE_FULL, f"{screened_queue_length(context)} >= {target} waiting"
+            )
+        )
+    return outcomes
+
+
+# --------------------------------------------------------------------------
+# Status
+
+
 def format_status(context: TuningContext) -> str:
-    """Render every trial of the study as a text table."""
+    """Render every trial of the study as a text table with the study's verdicts."""
     study = context.study
     trials = study.get_trials(deepcopy=False)
     header = [
@@ -627,21 +1044,41 @@ def format_status(context: TuningContext) -> str:
         "phase",
         "ref",
         "params",
+        "bench_ms",
+        "limit_ms",
         *[objective.name for objective in context.objectives],
+        *[
+            constraint.metric
+            for constraint in context.constraints
+            if constraint.source != "latency"
+        ],
+        "feasible",
     ]
     rows = [header]
     for trial in sorted(trials, key=lambda item: item.number):
-        params = " ".join(f"{key}={_short(value)}" for key, value in sorted(trial.params.items()))
         values = trial.values or []
+        metrics = trial.user_attrs.get(ATTR_METRICS) or {}
+        bench = trial_bench_latency_ms(trial)
+        limit = trial.user_attrs.get(ATTR_LATENCY_LIMIT)
+        stored = trial.user_attrs.get(ATTR_CONSTRAINTS)
+        feasible = "" if stored is None else ("yes" if trial_is_feasible(trial) else "no")
         rows.append(
             [
                 str(trial.number),
                 trial.state.name,
                 str(trial.user_attrs.get(ATTR_PHASE, "")),
                 str(trial.user_attrs.get(ATTR_REFERENCE, "")),
-                params,
+                _describe_params(trial),
+                "" if bench is None else f"{bench:.2f}",
+                "" if limit is None else f"{float(limit):.2f}",
                 *[f"{value:.4g}" for value in values],
                 *[""] * (len(context.objectives) - len(values)),
+                *[
+                    _short(metrics[constraint.metric]) if constraint.metric in metrics else ""
+                    for constraint in context.constraints
+                    if constraint.source != "latency"
+                ],
+                feasible,
             ]
         )
     widths = [max(len(row[column]) for row in rows) for column in range(len(header))]
@@ -650,19 +1087,62 @@ def format_status(context: TuningContext) -> str:
         for row in rows
     ]
     completed = [trial for trial in trials if trial.state == TrialState.COMPLETE]
+    phases = {}
+    for trial in trials:
+        phases[str(trial.user_attrs.get(ATTR_PHASE, trial.state.name.lower()))] = (
+            phases.get(str(trial.user_attrs.get(ATTR_PHASE, trial.state.name.lower())), 0) + 1
+        )
     lines.append("")
     lines.append(
-        f"study {study.study_name}: {len(trials)} trials, {len(completed)} complete, "
-        f"{len(study.best_trials) if completed else 0} on the Pareto front"
+        f"study {study.study_name}: {len(trials)} trials, {len(completed)} complete, phases "
+        + ", ".join(f"{name}={count}" for name, count in sorted(phases.items()))
     )
-    for trial in study.best_trials if completed else []:
-        lines.append(
-            f"  pareto #{trial.number}: "
-            + ", ".join(
-                f"{objective.name}={value:.4g}"
-                for objective, value in zip(context.objectives, trial.values, strict=True)
+    reference = reference_latency_ms(study, context.constraints)
+    for constraint in latency_constraints(context.constraints):
+        if constraint.relative:
+            lines.append(
+                f"latency bound: {constraint.reference} + {constraint.margin:g} ms = "
+                + (
+                    "unknown"
+                    if reference is None
+                    else f"{constraint.upper_bound(reference):.2f} ms"
+                )
             )
+        elif constraint.max is not None:
+            lines.append(f"latency bound: {constraint.max:.2f} ms")
+    cap = context.max_trained_trials
+    lines.append(
+        f"trainings paid for: {count_trained_here(study)}"
+        + ("" if cap is None else f" of {cap}")
+        + f", screened and waiting: {screened_queue_length(context)}"
+    )
+    if len(context.objectives) == 1:
+        best = best_feasible_trial(study, context.objectives[0]) if completed else None
+        if best is None:
+            lines.append("best feasible trial: none yet")
+        else:
+            lines.append(
+                f"best feasible trial: #{best.number} {context.objectives[0].name}="
+                f"{best.values[0]:.4g} ({_describe_params(best)})"
+            )
+    elif completed:
+        lines.append(f"{len(study.best_trials)} on the Pareto front")
+        for trial in study.best_trials:
+            lines.append(
+                f"  pareto #{trial.number}: "
+                + ", ".join(
+                    f"{objective.name}={value:.4g}"
+                    for objective, value in zip(context.objectives, trial.values, strict=True)
+                )
+            )
+    termination = study.user_attrs.get(STUDY_ATTR_TERMINATION)
+    if termination:
+        lines.append(
+            f"termination check ({termination.get('checked_at', '')}): {termination.get('reason', '')}"
         )
+    verdict = study_terminated(study)
+    if verdict:
+        lines.append(f"TERMINATED at {verdict.get('checked_at', '')}: {verdict.get('reason', '')}")
     return "\n".join(lines)
 
 

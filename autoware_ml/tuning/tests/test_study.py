@@ -24,21 +24,28 @@ from omegaconf import OmegaConf
 
 from autoware_ml.tuning.search_space import LitePTSearchSpace
 from autoware_ml.tuning.study import (
+    ATTR_BENCH,
     ATTR_CONSTRAINTS,
     ATTR_PHASE,
     ATTR_REFERENCE,
     PHASE_TRAINED,
     Constraint,
     Objective,
+    best_feasible_trial,
     build_sampler,
     constraint_values,
     constraints_from_user_attrs,
     enqueue_reference_trials,
+    feasible_complete_trials,
+    find_reference_trial,
     load_constraints,
     load_objectives,
     objective_values,
     open_study,
+    reference_latency_ms,
+    reference_name_for_params,
     resolve_storage_url,
+    trial_is_feasible,
     trials_in_phase,
 )
 from autoware_ml.tuning.tests.test_search_space import TINY
@@ -77,10 +84,73 @@ def test_objective_values_follow_study_order() -> None:
 
 def test_constraints_report_violation_magnitude() -> None:
     constraints = load_constraints([{"metric": "r", "min": 0.4}, {"metric": "l", "max": 30.0}])
-    assert constraint_values(constraints, {"r": 0.5, "l": 20.0}) == [0.0, 0.0]
+    # Feasible values report their slack as a negative number.
+    assert constraint_values(constraints, {"r": 0.5, "l": 20.0}) == pytest.approx([-0.1, -10.0])
     assert constraint_values(constraints, {"r": 0.1, "l": 35.0}) == pytest.approx([0.3, 5.0])
-    with pytest.raises(ValueError, match="min or a max"):
+    both = Constraint("l", min=10.0, max=30.0)
+    assert both.violation(20.0) == pytest.approx(-10.0)
+    assert both.violation(5.0) == pytest.approx(5.0)
+    with pytest.raises(ValueError, match="min, a max or a reference"):
         Constraint("r")
+
+
+def test_latency_constraints_bound_absolutely_or_relative_to_a_reference() -> None:
+    constraints = load_constraints(
+        [
+            {"metric": "r", "min": 0.35},
+            {"source": "latency", "name": "latency_ms", "reference": "tiny", "margin_ms": 0.1},
+        ]
+    )
+    latency = constraints[1]
+    assert latency.relative and latency.source == "latency"
+    assert latency.upper_bound(13.5) == pytest.approx(13.6)
+    with pytest.raises(ValueError, match="not been measured"):
+        latency.upper_bound(None)
+    # Metrics, latency and the reference latency each feed their own constraint.
+    assert constraint_values(constraints, {"r": 0.5}, 13.55, 13.5) == pytest.approx([-0.15, -0.05])
+    assert constraint_values(constraints, {"r": 0.3}, 14.0, 13.5) == pytest.approx([0.05, 0.4])
+    # A trial rejected before training has no metrics; the caller says what to record.
+    assert constraint_values(constraints, {}, 14.0, 13.5, unknown_metric_violation=0.0) == (
+        pytest.approx([0.0, 0.4])
+    )
+    with pytest.raises(KeyError, match="'r'"):
+        constraint_values(constraints, {}, 14.0, 13.5)
+    with pytest.raises(ValueError, match="needs a measured latency"):
+        constraint_values(constraints, {"r": 0.5}, None, 13.5)
+    absolute = load_constraints([{"source": "latency", "max": 20.0}])[0]
+    assert absolute.metric == "latency_ms" and not absolute.relative
+    assert absolute.violation(25.0) == pytest.approx(5.0)
+    with pytest.raises(ValueError, match="only latency can be relative"):
+        Constraint("r", reference="tiny")
+    with pytest.raises(ValueError, match="excludes min and max"):
+        Constraint("l", max=1.0, source="latency", reference="tiny")
+
+
+def test_feasibility_and_reference_helpers() -> None:
+    objective = Objective("val/seg3d/mIoU", "maximize", "metric")
+    study = optuna.create_study(direction="maximize")
+    values = {0: (0.60, [0.0, -0.1]), 1: (0.70, [0.2, -0.1]), 2: (0.65, [-0.1, -0.2])}
+    for number, (value, violations) in values.items():
+        trial = study.ask()
+        trial.set_user_attr(ATTR_CONSTRAINTS, violations)
+        if number == 0:
+            trial.set_user_attr(ATTR_REFERENCE, "tiny")
+            trial.set_user_attr(ATTR_BENCH, {"latency_ms": 13.5})
+        study.tell(trial, value)
+    assert [trial.number for trial in feasible_complete_trials(study)] == [0, 2]
+    assert not trial_is_feasible(study.trials[1])
+    best = best_feasible_trial(study, objective)
+    assert best is not None and best.number == 2
+    assert find_reference_trial(study, "tiny").number == 0
+    assert find_reference_trial(study, "base") is None
+    constraints = load_constraints([{"source": "latency", "reference": "tiny", "margin_ms": 0.1}])
+    assert reference_latency_ms(study, constraints) == pytest.approx(13.5)
+    assert reference_latency_ms(study, load_constraints([{"metric": "r", "min": 0.1}])) is None
+    space = LitePTSearchSpace()
+    references = {"tiny": TINY, "base": {**TINY, "width_preset": "base"}}
+    assert reference_name_for_params(space, references, TINY) == "tiny"
+    assert reference_name_for_params(space, references, {**TINY, "width_preset": "base"}) == "base"
+    assert reference_name_for_params(space, references, {**TINY, "mlp_ratio": 2}) is None
 
 
 def test_constraints_func_reads_stored_violations_or_assumes_feasible() -> None:

@@ -26,9 +26,12 @@ Bash completion is installed automatically by the Docker image build and by
 | `session ls`     | List managed background tasks                             |
 | `session stop`   | Stop a managed background task                            |
 | `tune init`      | Create a tuning study and queue its reference trials      |
+| `tune import`    | Import the measured trials of an earlier study            |
+| `tune screen`    | Time trials on the bench and queue the fast ones          |
+| `tune export`    | Export one trial's bench package                          |
 | `tune train`     | Train a batch of tuning trials                            |
-| `tune measure`   | Validate and benchmark trained tuning trials              |
-| `tune status`    | Show a tuning study's trials and Pareto front             |
+| `tune measure`   | Validate trained tuning trials and tell the sampler       |
+| `tune status`    | Show a tuning study's trials and verdicts                 |
 
 ## train
 
@@ -290,13 +293,17 @@ Current visualization coverage:
 
 ## tune
 
-Drive a two-phase Optuna study: train trials in batches, measure them in a
-later batch, and only then report each trial to the sampler. See
-[Optuna](optuna.md#two-phase-batch-tuning) for the workflow and the config block.
+Drive a batched Optuna study: screen trials on the bench, train the ones that
+pass the latency bound, measure them, and only then report each trial to the
+sampler. See [Optuna](optuna.md#batched-tuning-with-a-bench-in-the-loop) for
+the workflow and the config block.
 
 ```bash
 autoware-ml tune init --config-name <tuning_config> [hydra_overrides...]
-autoware-ml tune train --config-name <tuning_config> --n-trials <n> [--gpus 0,1] [hydra_overrides...]
+autoware-ml tune import --config-name <tuning_config> --from-storage <url> --from-study <name> [hydra_overrides...]
+autoware-ml tune screen --config-name <tuning_config> [--n-trials <n>] [--queue-target <n>] [--ignore-window] [--ignore-termination] [hydra_overrides...]
+autoware-ml tune export --config-name <tuning_config> (--trial <n> | --reference <name>) [hydra_overrides...]
+autoware-ml tune train --config-name <tuning_config> --n-trials <n> [--gpus 0,1] [--ignore-termination] [hydra_overrides...]
 autoware-ml tune measure --config-name <tuning_config> [--frames <n>] [--max-trials <n>] [hydra_overrides...]
 autoware-ml tune status --config-name <tuning_config> [hydra_overrides...]
 ```
@@ -304,9 +311,15 @@ autoware-ml tune status --config-name <tuning_config> [hydra_overrides...]
 **Arguments:**
 
 - `--config-name`: A config with a `tuning` block, such as `segmentation3d/litept/tune_voxel012_122m_t4dataset_j6gen2`
+- `--from-storage`, `--from-study` (`import`): The source study's Optuna storage URL and name
+- `--n-trials` (`screen`): Measure at most this many trials in this call
+- `--queue-target` (`screen`): Screened trials to keep waiting for training, overriding the config's policy
+- `--ignore-window` (`screen`): Use the bench outside its configured window
+- `--ignore-termination` (`screen`, `train`): Keep going after the study terminated itself
+- `--trial`, `--reference` (`export`): Which trial to export
 - `--n-trials` (`train`): Number of trainings to launch in this batch
 - `--gpus` (`train`): Comma-separated device ids; one training runs per device at a time. Without it, trainings run one after another on the visible devices.
-- `--frames` (`measure`): Timed frames per trial, overriding the config
+- `--frames` (`measure`): Timed frames of the proxy benchmark per trial, overriding the config
 - `--max-trials` (`measure`): Measure at most this many trials in this call
 
 Hydra overrides apply to every trial of the invocation, after the trial's own
