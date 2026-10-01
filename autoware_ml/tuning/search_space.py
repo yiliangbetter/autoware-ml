@@ -34,6 +34,7 @@ from autoware_ml.tuning.presets import (
     CONV_STEM,
     DEC_DEPTH_PRESETS,
     DECODER_STAGE_COUNT,
+    ENCODER_INPUT_CHANNELS,
     STAGE_COUNT,
     STEM_TYPES,
     WIDTH_PRESETS,
@@ -135,7 +136,7 @@ class LitePTSearchSpace:
         conv_stem_kernel_size: int = 3,
         encoder_key: str = "model.encoder",
         head_key: str = "model.seg3d_head",
-        in_channels: int = 4,
+        in_channels: int = ENCODER_INPUT_CHANNELS,
     ) -> None:
         """Initialize the search space.
 

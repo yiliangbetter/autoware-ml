@@ -43,9 +43,10 @@ import optuna
 from omegaconf import DictConfig, OmegaConf
 from optuna.trial import FrozenTrial, TrialState
 
+from autoware_ml.dataclasses.batch.sample_batch import ModelGTBatch
 from autoware_ml.tuning.bench import BenchError, BenchJobError, BenchRunner, BenchSettings
 from autoware_ml.tuning.export import load_manifest
-from autoware_ml.tuning.latency import LatencyReport, benchmark_latency, forward_inputs
+from autoware_ml.tuning.latency import LatencyReport, benchmark_latency
 from autoware_ml.tuning.search_space import LitePTSearchSpace, TrialProposal
 from autoware_ml.tuning.study import (
     ATTR_BENCH,
@@ -589,9 +590,9 @@ def evaluate_trial(
     benchmark_datamodule.setup("validate")
     model.to(device).eval()
 
-    def forward(batch: Mapping[str, Any]) -> Any:
-        prepared = model.on_after_batch_transfer(dict(batch), 0)
-        return model(**forward_inputs(model, prepared))
+    def forward(batch: ModelGTBatch) -> Any:
+        prepared = model.on_after_batch_transfer(batch, 0)
+        return model(**model.bind_forward_inputs(prepared))
 
     report = benchmark_latency(
         forward,
@@ -606,16 +607,16 @@ def evaluate_trial(
     return TrialEvaluation(metrics=metrics, latency=report)
 
 
-def encoder_stage_counter(model: Any) -> Callable[[Mapping[str, Any]], Sequence[int]] | None:
+def encoder_stage_counter(model: Any) -> Callable[[ModelGTBatch], Sequence[int]] | None:
     """Return a per-stage point counter for PTv3-style encoders, else ``None``."""
     encoder = getattr(model, "encoder", None)
     if encoder is None:
         return None
     from autoware_ml.models.segmentation3d.encoders.ptv3 import collect_encoder_stage_points
 
-    def count(batch: Mapping[str, Any]) -> Sequence[int]:
-        prepared = model.on_after_batch_transfer(dict(batch), 0)
-        inputs = forward_inputs(model, prepared)
+    def count(batch: ModelGTBatch) -> Sequence[int]:
+        prepared = model.on_after_batch_transfer(batch, 0)
+        inputs = model.bind_forward_inputs(prepared)
         deepest = encoder(
             {key: inputs[key] for key in ("coord", "feat", "grid_coord", "offset") if key in inputs}
         )
