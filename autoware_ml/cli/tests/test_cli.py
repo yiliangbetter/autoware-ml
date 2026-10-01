@@ -260,6 +260,7 @@ class TestCliCommands:
             extra_args=["tuning.storage=sqlite:///study.db"],
             n_trials=4,
             gpus="0,1",
+            ignore_termination=False,
         )
 
     def test_tune_measure_and_status_forward_overrides(self) -> None:
