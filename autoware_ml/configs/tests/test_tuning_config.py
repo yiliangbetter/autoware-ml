@@ -32,15 +32,14 @@ def test_tuning_block_instantiates_and_references_lie_in_the_space() -> None:
     space = hydra.utils.instantiate(cfg.tuning.search_space)
     assert isinstance(space, LitePTSearchSpace)
     objectives = load_objectives(OmegaConf.to_container(cfg.tuning.objectives, resolve=True))
-    assert [objective.name for objective in objectives] == [
-        "latency_ms",
-        "val/seg3d/mIoU",
-        "val/seg3d/recall_debris",
-    ]
+    # Run 2 maximizes mIoU alone; debris recall and deployed latency are constraints.
+    assert [objective.name for objective in objectives] == ["val/seg3d/mIoU"]
     constraints = load_constraints(OmegaConf.to_container(cfg.tuning.constraints, resolve=True))
     assert constraints[0].metric == "val/seg3d/recall_debris"
+    assert constraints[1].source == "latency"
+    assert constraints[1].reference == "litept_tiny"
     references = OmegaConf.to_container(cfg.tuning.reference_trials, resolve=True)
-    assert set(references) == {"litept_tiny", "litept_base"}
+    assert set(references) == {"litept_tiny"}
     for params in references.values():
         space.validate_params(params)
     # The tiny reference reproduces the shipped tiny config it inherits from.
