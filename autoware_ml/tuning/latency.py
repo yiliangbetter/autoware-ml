@@ -23,7 +23,7 @@ the vehicle hardware.
 from __future__ import annotations
 
 import statistics
-from collections.abc import Callable, Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from contextlib import nullcontext
 from dataclasses import asdict, dataclass
 from itertools import islice
@@ -32,7 +32,7 @@ from typing import Any
 
 import torch
 
-from autoware_ml.utils.deploy import move_to_device
+from autoware_ml.dataclasses.batch.sample_batch import ModelGTBatch
 
 PRECISIONS = ("fp32", "fp16")
 
@@ -98,15 +98,15 @@ def _time_call(function: Callable[[], Any], use_cuda: bool) -> float:
 
 
 def benchmark_latency(
-    forward: Callable[[Mapping[str, Any]], Any],
-    batches: Iterable[Mapping[str, Any]],
+    forward: Callable[[ModelGTBatch], Any],
+    batches: Iterable[ModelGTBatch],
     *,
     device: torch.device,
     precision: str = "fp32",
     frames: int = 50,
     warmup: int = 10,
     repeats: int = 5,
-    stage_counter: Callable[[Mapping[str, Any]], Sequence[int]] | None = None,
+    stage_counter: Callable[[ModelGTBatch], Sequence[int]] | None = None,
 ) -> LatencyReport:
     """Time ``forward`` over single-frame batches.
 
@@ -146,7 +146,7 @@ def benchmark_latency(
     stage_counts: list[Sequence[int]] = []
     with torch.inference_mode(), autocast:
         for index, batch in enumerate(islice(batches, warmup + frames)):
-            batch = move_to_device(dict(batch), device)
+            batch = batch.to_device(device)
             if index < warmup:
                 forward(batch)
                 if stage_counter is not None:
@@ -173,17 +173,3 @@ def benchmark_latency(
         device=str(device),
         voxels_per_stage=voxels_per_stage,
     )
-
-
-def forward_inputs(model: torch.nn.Module, batch: Mapping[str, Any]) -> dict[str, Any]:
-    """Select the batch entries the model's ``forward`` signature accepts.
-
-    Mirrors the Lightning step so the benchmark runs the same call as
-    validation does.
-    """
-    signature = getattr(model, "forward_signature", None)
-    if signature is None:
-        import inspect
-
-        signature = inspect.signature(model.forward)
-    return {key: batch[key] for key in signature.parameters if key in batch}

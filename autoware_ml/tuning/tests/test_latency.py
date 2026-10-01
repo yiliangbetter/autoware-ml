@@ -16,23 +16,35 @@
 
 from __future__ import annotations
 
+from typing import NamedTuple
+
 import pytest
 import torch
 
-from autoware_ml.tuning.latency import benchmark_latency, forward_inputs
+from autoware_ml.tuning.latency import benchmark_latency
+
+
+class _Batch(NamedTuple):
+    """Stand-in for the typed batch: the benchmark only needs ``to_device``."""
+
+    feat: torch.Tensor
+    extra: int
+
+    def to_device(self, device: torch.device) -> _Batch:
+        return _Batch(self.feat.to(device), self.extra)
 
 
 def _batches(count: int):
     for index in range(count):
-        yield {"feat": torch.full((4, 3), float(index)), "extra": index}
+        yield _Batch(torch.full((4, 3), float(index)), index)
 
 
 def test_benchmark_times_only_the_frames_after_warmup() -> None:
     seen: list[float] = []
 
     def forward(batch):
-        seen.append(float(batch["feat"][0, 0]))
-        return batch["feat"].sum()
+        seen.append(float(batch.feat[0, 0]))
+        return batch.feat.sum()
 
     report = benchmark_latency(
         forward,
@@ -42,7 +54,7 @@ def test_benchmark_times_only_the_frames_after_warmup() -> None:
         frames=3,
         warmup=2,
         repeats=2,
-        stage_counter=lambda batch: [int(batch["feat"].shape[0]), 2],
+        stage_counter=lambda batch: [int(batch.feat.shape[0]), 2],
     )
     # Two warmup frames once each, then three frames twice each; the rest untouched.
     assert seen == [0.0, 1.0, 2.0, 2.0, 3.0, 3.0, 4.0, 4.0]
@@ -64,12 +76,3 @@ def test_benchmark_rejects_bad_settings() -> None:
         benchmark_latency(
             lambda batch: None, _batches(1), device=torch.device("cpu"), precision="fp32", warmup=1
         )
-
-
-def test_forward_inputs_follows_the_forward_signature() -> None:
-    class Model(torch.nn.Module):
-        def forward(self, feat, offset):
-            return feat, offset
-
-    batch = {"feat": 1, "offset": 2, "segment": 3}
-    assert forward_inputs(Model(), batch) == {"feat": 1, "offset": 2}

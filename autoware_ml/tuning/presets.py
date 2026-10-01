@@ -38,6 +38,12 @@ ATTN_STAGE_COUNT = STAGE_COUNT - CONV_STAGE_COUNT
 ROPE_AXES = 3
 ROPE_MIN_HEAD_DIM = 6
 
+# Width of the voxel feature the encoder reads, mirroring OUTPUT_CHANNELS in
+# autoware_ml.models.segmentation3d.encoders.voxel. Duplicated rather than imported
+# to keep this module torch-free; test_estimate_matches_the_real_encoder compares the
+# estimate against the real encoder's default and fails if the two drift apart.
+ENCODER_INPUT_CHANNELS = 17
+
 LINEAR_STEM = "linear"
 CONV_STEM = "conv"
 STEM_TYPES = (LINEAR_STEM, CONV_STEM)
@@ -286,7 +292,7 @@ def estimate_encoder_parameters(
     mlp_ratio: float,
     stem_type: str = LINEAR_STEM,
     stem_kernel_size: int = 3,
-    in_channels: int = 4,
+    in_channels: int = ENCODER_INPUT_CHANNELS,
 ) -> int:
     """Estimate the LitePT encoder's trainable parameter count analytically.
 

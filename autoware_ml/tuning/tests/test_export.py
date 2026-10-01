@@ -20,6 +20,7 @@ import json
 from pathlib import Path
 
 import yaml
+from omegaconf import OmegaConf
 
 from autoware_ml.tuning.export import (
     MANIFEST_NAME,
@@ -53,8 +54,12 @@ def test_ml_package_params_follow_the_trial_config() -> None:
     head = parsed["segmentation3d"]
     assert head["dec_depths"] == [0, 0, 0, 0]
     assert head["dec_patch_size"] == [256, 256, 256, 256]
-    assert len(head["class_names"]) == 20 and "debris" in head["class_names"]
-    assert len(head["palette"]) == 60
+    # The taxonomy is the database's since #143, so mirror it rather than pin a count;
+    # debris is asserted by name because the study constrains its recall.
+    taxonomy = list(OmegaConf.select(cfg, "t4dataset.segmentation3d.class_names"))
+    assert head["class_names"] == taxonomy
+    assert "debris" in head["class_names"]
+    assert len(head["palette"]) == 3 * len(taxonomy)
 
 
 def test_default_palette_has_three_values_per_class() -> None:
