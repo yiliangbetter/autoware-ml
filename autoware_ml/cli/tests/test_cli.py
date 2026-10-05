@@ -770,6 +770,48 @@ class TestCliRuntime:
         assert "+trainer.strategy=ddp" in cli_runtime.sys.argv
         assert "trainer.devices=2" in cli_runtime.sys.argv
 
+    @pytest.mark.parametrize("flag", ["--multirun", "-m"])
+    def test_run_hydra_entrypoint_leaves_a_sweep_to_open_its_own_runs(self, flag: str) -> None:
+        """A sweep gets no pre-created run, and inherits no stale one either.
+
+        Hydra gives every job of a sweep its own output directory, so one
+        pre-created run cannot describe them all and the entrypoint would
+        reject the mismatch. Each job opens its own run instead.
+        """
+        observed: dict[str, str | None] = {}
+
+        def record_environment(*args, **kwargs) -> None:
+            observed["run_id"] = os.environ.get("AUTOWARE_ML_RUN_ID")
+            observed["run_dir"] = os.environ.get("AUTOWARE_ML_HYDRA_RUN_DIR")
+
+        with (
+            patch.dict(
+                os.environ,
+                {"AUTOWARE_ML_RUN_ID": "stale-run", "AUTOWARE_ML_HYDRA_RUN_DIR": "/tmp/stale"},
+            ),
+            patch("autoware_ml.cli.runtime.prepare_runtime_environment") as prepare_mock,
+            patch("autoware_ml.cli.runtime.run_lazy_script", side_effect=record_environment),
+        ):
+            cli_runtime.run_hydra_entrypoint(
+                cli.TRAIN_ENTRYPOINT_MODULE,
+                SAMPLE_CONFIG_NAME,
+                "train",
+                extra_args=[flag, "hydra.sweeper.n_trials=2"],
+            )
+
+        prepare_mock.assert_not_called()
+        assert observed == {"run_id": None, "run_dir": None}
+        assert flag in cli_runtime.sys.argv
+        # The variables are restored once the command returns.
+        assert os.environ.get("AUTOWARE_ML_RUN_ID") is None
+
+    def test_is_multirun_only_matches_the_sweep_flags(self) -> None:
+        assert cli_runtime.is_multirun(["--multirun"])
+        assert cli_runtime.is_multirun(["trainer.devices=2", "-m"])
+        assert not cli_runtime.is_multirun([])
+        # A value that merely contains the flag is not one.
+        assert not cli_runtime.is_multirun(["+note=--multirun", "model.name=m"])
+
     def test_prepare_runtime_environment_uses_deploy_config_experiment_for_multi_checkpoint(
         self,
         tmp_path: Path,
