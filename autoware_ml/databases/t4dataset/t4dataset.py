@@ -14,6 +14,7 @@
 
 from __future__ import annotations
 
+import itertools
 from typing import Mapping, Sequence
 import logging
 from concurrent.futures import ProcessPoolExecutor
@@ -89,6 +90,30 @@ def _apply_t4_records_generator(
     )
     # Generate DatasetRecords
     return t4_records_generator.generate_dataset_records()
+
+
+def _apply_t4_records_generator_frame(
+    t4_records_generator_worker_params: T4RecordsGeneratorWorkerParams,
+    polars_schema: pl.Schema,
+) -> pl.DataFrame:
+    """
+    Generate the records of one scenario in a worker and return them as a table.
+
+    The table crosses the process boundary instead of the record objects, so the
+    parent holds the records of a database as one columnar table rather than as
+    objects: a 10 Hz corpus has a hundred thousand frames per database, which as
+    objects need tens of gigabytes.
+
+    Args:
+      t4_records_generator_worker_params: T4 records generator worker parameters.
+      polars_schema: Schema of the record table.
+    Returns:
+      pl.DataFrame: Table of the scenario's records, in sample order.
+    """
+
+    records = _apply_t4_records_generator(t4_records_generator_worker_params)
+    # Dump to a list of dictionaries to make it safer since it's using Pydantic.BaseModel
+    return pl.DataFrame([record.to_dictionary() for record in records], schema=polars_schema)
 
 
 class T4Dataset(BaseDatabase):
@@ -228,20 +253,11 @@ class T4Dataset(BaseDatabase):
         )
 
         # 2) Send the list to the multiprocessing or single processing the scenario
-        # samples/frames
-        scenario_sample_records = self._run_t4records_generator(unique_scenario_data)
-        logger.info(f"Processed {len(scenario_sample_records)} scenario sample records")
+        # samples/frames; every scenario comes back as a table of its records
+        df = self._run_t4records_generator(unique_scenario_data)
+        logger.info(f"Processed {len(df)} scenario sample records")
 
         # 3) Save the scenario sample records to a polars .parquet file
-        # Dump to a list of dictionaries to make it safer since it's using Pydantic.BaseModel
-        scenario_dict_records = [record.to_dictionary() for record in scenario_sample_records]
-
-        # 4) Get the polar schema
-        polars_schema = self.get_polars_schema()
-        logger.info(f"Parquet schema: {polars_schema}")
-
-        # 5) Save the scenario sample records to a polars .parquet file
-        df = pl.DataFrame(scenario_dict_records, schema=polars_schema)
         df.write_parquet(df_cache_path)
         logger.info(f"Saved the database cache to {df_cache_path} with the hash: {df_hash}")
 
@@ -254,7 +270,7 @@ class T4Dataset(BaseDatabase):
 
     def _run_t4records_generator(
         self, scenario_data: MappingProxyType[str, ScenarioData]
-    ) -> Sequence[DatasetRecord]:
+    ) -> pl.DataFrame:
         """
         Multi-process scenario records from the database.
 
@@ -262,9 +278,10 @@ class T4Dataset(BaseDatabase):
           scenario_data: Dict of Scenario ID to ScenarioData.
 
         Returns:
-          Sequence[DatasetRecord]: Sequence of dataset records.
+          pl.DataFrame: Table of the records of every scenario, in scenario order.
         """
 
+        polars_schema = self.get_polars_schema()
         # Group params for each worker
         worker_params = [
             T4RecordsGeneratorWorkerParams(
@@ -279,16 +296,21 @@ class T4Dataset(BaseDatabase):
             for scenario in scenario_data.values()
         ]
 
-        flatten_records = []
+        frames: list[pl.DataFrame] = []
         if self._num_workers > 1:
             # Run T4 records generator in multi processors
             with ProcessPoolExecutor(max_workers=self._num_workers) as executor:
-                futures = executor.map(_apply_t4_records_generator, worker_params)
-                for result in tqdm(futures, total=len(worker_params)):
-                    flatten_records.extend(result)
-                return flatten_records
+                futures = executor.map(
+                    _apply_t4_records_generator_frame,
+                    worker_params,
+                    itertools.repeat(polars_schema),
+                )
+                frames.extend(tqdm(futures, total=len(worker_params)))
         else:
             # Run T4 records generator in a single processor
             for worker_param in tqdm(worker_params, total=len(worker_params)):
-                flatten_records.extend(_apply_t4_records_generator(worker_param))
-            return flatten_records
+                frames.append(_apply_t4_records_generator_frame(worker_param, polars_schema))
+        if not frames:
+            return pl.DataFrame(schema=polars_schema)
+        # One contiguous table, as the single DataFrame of every record used to be
+        return pl.concat(frames, how="vertical", rechunk=True)
