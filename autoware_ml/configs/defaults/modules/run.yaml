@@ -1,7 +1,13 @@
 # @package _global_
 
+# Both directories name the config through ``hydra.job.config_name`` rather
+# than the ``hydra:`` resolver. That resolver reads the HydraConfig singleton,
+# which is only set once a job starts, so it raises while Hydra is still
+# resolving its own config: the sweep directory is read before the first job
+# exists. The dotted reference resolves inside the hydra node itself and works
+# in both modes.
 hydra:
   run:
-    dir: ${oc.env:AUTOWARE_ML_HYDRA_RUN_DIR,mlruns/${user_config_name:${hydra:job.config_name}}/_hydra/${now:%Y-%m-%d}/${now:%H-%M-%S}}
+    dir: ${oc.env:AUTOWARE_ML_HYDRA_RUN_DIR,mlruns/${user_config_name:${hydra.job.config_name}}/_hydra/${now:%Y-%m-%d}/${now:%H-%M-%S}}
   sweep:
-    dir: mlruns/optuna/${user_config_name:${hydra:job.config_name}}/_hydra/${now:%Y-%m-%d}/${now:%H-%M-%S}
+    dir: mlruns/optuna/${user_config_name:${hydra.job.config_name}}/_hydra/${now:%Y-%m-%d}/${now:%H-%M-%S}

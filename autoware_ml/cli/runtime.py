@@ -53,6 +53,20 @@ HYDRA_CONFIG_NAME_OPTION = "--config-name"
 HYDRA_CONFIG_PATH_OPTION = "--config-path"
 HYDRA_SEARCHPATH_PREFIX = "hydra.searchpath="
 TASK_CONFIG_PREFIX = "tasks"
+# Hydra's flags for running a sweep instead of a single job.
+HYDRA_MULTIRUN_OPTIONS = ("--multirun", "-m")
+
+
+def is_multirun(extra_args: Sequence[str]) -> bool:
+    """Whether the caller asked Hydra for a sweep rather than a single run.
+
+    Args:
+        extra_args: Arguments forwarded to Hydra.
+
+    Returns:
+        True when a multirun flag is present.
+    """
+    return any(arg in HYDRA_MULTIRUN_OPTIONS for arg in extra_args)
 
 
 def resolve_module_spec(module_name: str) -> ModuleSpec:
@@ -292,7 +306,14 @@ def run_hydra_entrypoint(
 ) -> None:
     """Execute one Hydra-backed runtime entrypoint through the CLI wrapper."""
     env_updates: dict[str, str | None] = {}
-    if stage is not None:
+    if stage is not None and is_multirun(extra_args):
+        # A sweep runs many jobs in one process and Hydra gives each its own
+        # output directory, so a single pre-created run cannot describe them
+        # all and the entrypoint would reject the directory mismatch. Clear
+        # both variables instead: every job then opens its own MLflow run
+        # under its own directory, which is what a sweep's trials need.
+        env_updates = {AUTOWARE_ML_RUN_ID_ENV: None, AUTOWARE_ML_HYDRA_RUN_DIR_ENV: None}
+    elif stage is not None:
         env_updates = prepare_runtime_environment(
             config_name,
             config_prefix,
