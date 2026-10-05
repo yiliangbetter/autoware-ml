@@ -10,6 +10,7 @@ import torch
 from autoware_ml.dataclasses.batch.sample_batch import ModelGTSample
 from autoware_ml.geometry.points.base_points import BasePoints
 from autoware_ml.geometry.bbox_3d.base_bbox3d import BaseBBoxes3D
+from autoware_ml.geometry.utils import points_in_convex_polygon_3d
 from autoware_ml.transforms.base import BaseTransform
 from autoware_ml.types.geometry import Box3DFieldIndex
 
@@ -33,6 +34,39 @@ def parse_exclusion_rules(rules: Sequence[Sequence[str]]) -> frozenset[tuple[str
                 f"Exclusion rule {index} must be a [class_name, attribute] pair, got {rule!r}."
             )
     return frozenset((str(rule[0]), str(rule[1])) for rule in rules)
+
+# Elements of the (boxes, surfaces, points) product one chunk of the point-in-box test
+# may hold: 2**27 float32 values are 512 MB.
+_POINTS_IN_BOXES_CHUNK_ELEMENTS = 1 << 27
+
+
+def count_points_in_bboxes(points: torch.Tensor, surfaces: torch.Tensor) -> torch.Tensor:
+    """
+    Count the points inside every box, a few boxes at a time.
+
+    The convex polygon test materializes a (boxes, surfaces, points) float tensor; on a
+    three-sweep cloud of 1.4 million points with 150 boxes that is 5 GB per sample, which
+    is what every dataloader worker allocated per sample. The boxes are therefore tested in
+    chunks sized to the point count and only the per-box count is kept. The counts are the
+    ones the one-shot test gives.
+
+    Args:
+        points: Point coordinates with shape (num_points, 3).
+        surfaces: Box surfaces with shape (num_bboxes, num_surfaces, num_surface_points, 3).
+
+    Returns:
+        torch.Tensor: Number of points inside each box, with shape (num_bboxes,).
+    """
+    num_bboxes, num_surfaces = surfaces.shape[0], surfaces.shape[1]
+    if num_bboxes == 0 or points.shape[0] == 0:
+        return torch.zeros((num_bboxes,), dtype=torch.float32, device=points.device)
+    chunk = max(1, _POINTS_IN_BOXES_CHUNK_ELEMENTS // (num_surfaces * points.shape[0]))
+    return torch.cat(
+        [
+            points_in_convex_polygon_3d(points, surfaces[start : start + chunk]).sum(dim=1)
+            for start in range(0, num_bboxes, chunk)
+        ]
+    )
 
 
 class BBoxesMinPointsFilter(BaseTransform):
@@ -73,12 +107,12 @@ class BBoxesMinPointsFilter(BaseTransform):
         )
 
         in_range = detection3d_gt_bboxes_3d.in_range_bev(self.bev_range)
-        points_in_bboxes = detection3d_gt_bboxes_3d.compute_points_in_bboxes(
-            points=point_cloud_data.coords,
+        num_points_in_bboxes = count_points_in_bboxes(
+            point_cloud_data.coords, detection3d_gt_bboxes_3d.corners_to_surfaces_3d()
         )
 
         # Boxes outside the range are kept whatever their point count
-        keep_bboxes_mask = (points_in_bboxes.sum(dim=1) >= self.min_points) | ~in_range
+        keep_bboxes_mask = (num_points_in_bboxes >= self.min_points) | ~in_range
         detection3d_gt_bboxes_3d.remove_bboxes(keep_bboxes_mask)
         return model_gt_sample
 
