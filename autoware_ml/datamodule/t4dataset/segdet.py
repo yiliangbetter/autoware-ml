@@ -277,9 +277,7 @@ class T4SegmentationDetection3DDataset(Dataset):
         if current_images is None and next_images is None:
             current_images = {}
             next_images = {}
-        elif not isinstance(current_images, Mapping) or not isinstance(
-            next_images, Mapping
-        ):
+        elif not isinstance(current_images, Mapping) or not isinstance(next_images, Mapping):
             raise ValueError(
                 "Camera metadata must be present on both keyframes when reconstructing images"
             )
@@ -353,10 +351,7 @@ class T4SegmentationDetection3DDataset(Dataset):
                 ):
                     camera_info["timestamp"] = (
                         float(current_camera["timestamp"])
-                        + (
-                            float(next_camera["timestamp"])
-                            - float(current_camera["timestamp"])
-                        )
+                        + (float(next_camera["timestamp"]) - float(current_camera["timestamp"]))
                         * fraction
                     )
                 interpolated_images[camera_name] = camera_info
