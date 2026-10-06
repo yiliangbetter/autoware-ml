@@ -793,18 +793,20 @@ def test_preview_rejects_incomplete_detection_ground_truth(
         )
 
 
-def test_preview_rejects_declared_but_empty_camera_metadata(
+def test_preview_skips_declared_but_empty_optional_camera_metadata(
     preview_session: RecordingBackend,
 ) -> None:
     sample = _segmentation_sample()
     sample["images"] = {}
 
-    with pytest.raises(ValueError, match="at least one camera"):
-        run_visualization_preview(
-            SegmentationPreviewModel(),
-            PreviewDataModule([sample], _SEGMENTATION_COLLATION),
-            _NOOP_PREVIEW,
-        )
+    count = run_visualization_preview(
+        SegmentationPreviewModel(),
+        PreviewDataModule([sample], _SEGMENTATION_COLLATION),
+        _NOOP_PREVIEW,
+    )
+
+    assert count == 1
+    assert preview_session.paths_of(ImageEvent) == []
 
 
 def test_preview_reports_observed_keys_when_no_task_matches(

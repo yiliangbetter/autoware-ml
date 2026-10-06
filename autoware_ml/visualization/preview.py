@@ -689,7 +689,7 @@ def _log_camera_preview(
     if not isinstance(images, Mapping):
         raise TypeError("Camera metadata 'images' must be a mapping")
     if not images:
-        raise ValueError("Camera metadata 'images' must contain at least one camera")
+        return
     session.log_cameras(
         dict(images),
         root_path=root_path,
