@@ -199,3 +199,18 @@ def test_session_logs_persistent_camera_projection_layers(
     assert recording_backend.paths_of(Points2DEvent) == [
         "scene/cameras/CAM_FRONT/projected/prediction/segmentation"
     ]
+
+
+def test_session_logs_the_scene_extent_only_when_there_is_geometry(
+    recording_backend: RecordingBackend,
+) -> None:
+    session = VisualizationSession(recording_backend)
+
+    session.log_scene_extent(
+        np.zeros((2, 3), dtype=np.float32),
+        boxes=(np.array([[1.0, 1.0, 1.0, 2.0, 2.0, 2.0, 0.0]], dtype=np.float32),),
+    )
+    session.log_scene_extent(None)
+
+    assert recording_backend.paths_of(PointCloud3DEvent) == ["scene/meta/extent"]
+    assert len(recording_backend.events) == 1

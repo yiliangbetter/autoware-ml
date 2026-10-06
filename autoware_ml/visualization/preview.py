@@ -621,6 +621,7 @@ def _log_segmentation_preview(
         sample_name=sample_name,
         point_color_mode=config.point_color_mode,
     )
+    session.log_scene_extent(points)
     point_layers = {
         "prediction/segmentation": CameraPointProjection(
             points=points,
@@ -693,6 +694,7 @@ def _log_detection_preview(
         sample_name=sample_name,
         point_color_mode=config.point_color_mode,
     )
+    session.log_scene_extent(points, boxes=(normalized_predictions["boxes"], gt_boxes))
     box_layers = {
         "prediction/detections": CameraBoxProjection(
             boxes=normalized_predictions["boxes"],
@@ -824,6 +826,13 @@ def _log_multitask_preview(
         root_path="scene",
     )
     normalized_predictions = normalize_detection_predictions(detection_predictions[0])
+    session.log_scene_extent(
+        segmentation_points,
+        boxes=(
+            normalized_predictions["boxes"],
+            detection_ground_truth_boxes if has_detection_ground_truth else None,
+        ),
+    )
     point_layers = {
         "prediction/segmentation": CameraPointProjection(
             points=segmentation_points,

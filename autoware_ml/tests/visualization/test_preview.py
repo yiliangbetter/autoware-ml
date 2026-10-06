@@ -238,6 +238,7 @@ def test_preview_logs_a_segmentation_sample(preview_session: RecordingBackend) -
     assert "scene/ground_truth/segmentation" in point_paths
     assert "scene/prediction/entropy" in point_paths
     assert "scene/prediction/probability" in point_paths
+    assert "scene/meta/extent" in point_paths
 
 
 def test_preview_requires_logits_for_pointwise_probability_and_entropy(

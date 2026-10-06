@@ -115,6 +115,47 @@ def build_lidar_reference_events(
     return events
 
 
+def build_scene_extent_event(
+    points: Any | None,
+    boxes: Sequence[Any | None] = (),
+    *,
+    root_path: str = "scene",
+) -> PointCloud3DEvent | None:
+    """Build two invisible corner points spanning everything one frame draws.
+
+    Rerun fits the initial eye of a 3D view to the bounds of the entities that
+    view shows. Sibling views of the same frame therefore start from different
+    eyes as soon as one of them shows boxes that stick out of the point cloud.
+    Logging the union extent once, and listing it in every scene view, gives
+    those views identical bounds and so an identical starting eye.
+    """
+    corners: list[np.ndarray] = []
+    if points is not None:
+        xyz = ensure_xyz(points)
+        if xyz.shape[0]:
+            corners.append(xyz)
+    for box_array in boxes:
+        if box_array is None:
+            continue
+        array = as_numpy(box_array, np.float32)
+        if array.ndim != 2 or array.shape[1] < 6 or not array.shape[0]:
+            continue
+        # Half the box diagonal bounds every yaw, so no rotation is needed.
+        half_diagonal = np.linalg.norm(array[:, 3:6], axis=1, keepdims=True) * 0.5
+        corners.append(array[:, :3] - half_diagonal)
+        corners.append(array[:, :3] + half_diagonal)
+    if not corners:
+        return None
+    stacked = np.concatenate(corners, axis=0)
+    positions = np.stack([stacked.min(axis=0), stacked.max(axis=0)]).astype(np.float32)
+    return PointCloud3DEvent(
+        path=f"{root_path}/meta/extent",
+        positions=positions,
+        colors=np.zeros((2, 4), dtype=np.uint8),
+        radii=1e-3,
+    )
+
+
 def ensure_image_uint8(image: Any) -> np.ndarray:
     """Normalize image-like data to an HWC uint8 array."""
     array = as_numpy(image)

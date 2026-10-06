@@ -35,6 +35,7 @@ from autoware_ml.visualization.detection3d import (
     build_detection3d_data_events,
     build_detection3d_events,
 )
+from autoware_ml.visualization.common import build_scene_extent_event
 from autoware_ml.visualization.events import ClearEvent, VisualizationEvent
 from autoware_ml.visualization.segmentation3d import (
     build_segmentation3d_data_events,
@@ -83,6 +84,18 @@ class VisualizationSession:
                 ClearEvent("scene/meta"),
             ]
         )
+
+    def log_scene_extent(
+        self,
+        points: Any | None,
+        *,
+        boxes: Sequence[Any | None] = (),
+        root_path: str = "scene",
+    ) -> None:
+        """Log the invisible frame extent that keeps sibling 3D views aligned."""
+        event = build_scene_extent_event(points, boxes, root_path=root_path)
+        if event is not None:
+            self.backend.log_events([event])
 
     def log_calibration_status(
         self,

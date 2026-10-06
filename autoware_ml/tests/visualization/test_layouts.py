@@ -20,9 +20,36 @@ import numpy as np
 
 from autoware_ml.visualization.events import ImageEvent, LayoutGroup, ViewSpec
 from autoware_ml.visualization.layouts import (
+    SCENE_EXTENT_PATH,
     build_calibration_blueprint,
     build_scene_blueprint,
 )
+
+_MULTI_PATHS = {
+    "scene/ground_truth/segmentation",
+    "scene/prediction/segmentation",
+    "scene/prediction/entropy",
+    "scene/prediction/probability",
+    "scene/ground_truth/detections",
+    "scene/prediction/detections",
+    "scene/lidar/intensity",
+    "scene/cameras/front",
+    "scene/cameras/front/projected/ground_truth/segmentation",
+    "scene/cameras/front/projected/prediction/detections",
+    "scene/metrics/detection/precision",
+    "scene/metrics/detection/true_positives",
+}
+
+
+def _views(layout: ViewSpec | LayoutGroup) -> list[ViewSpec]:
+    """Collect the views of a layout in display order."""
+    if isinstance(layout, ViewSpec):
+        return [layout]
+    return [view for child in layout.children for view in _views(child)]
+
+
+def _scene_views(layout: ViewSpec | LayoutGroup) -> list[ViewSpec]:
+    return [view for view in _views(layout) if view.kind == "spatial3d"]
 
 
 def test_calibration_layout_is_expressed_only_as_neutral_specs() -> None:
@@ -240,3 +267,30 @@ def test_unknown_scene_adapter_gets_a_generic_view() -> None:
     assert isinstance(view, ViewSpec)
     assert view.name == "Scene"
     assert view.contents == ("scene/new_task/result",)
+
+
+def test_scene_views_list_the_shared_extent_when_it_is_logged() -> None:
+    blueprint = build_scene_blueprint(
+        _MULTI_PATHS | {SCENE_EXTENT_PATH},
+        ["scene/cameras/front"],
+        point_color_mode="semantic",
+        camera_frustums_visible=False,
+        timeline="frame",
+    )
+
+    assert blueprint is not None
+    scene_views = _scene_views(blueprint.layout)
+    assert scene_views
+    assert all(SCENE_EXTENT_PATH in view.contents for view in scene_views)
+
+    without_extent = build_scene_blueprint(
+        _MULTI_PATHS,
+        ["scene/cameras/front"],
+        point_color_mode="semantic",
+        camera_frustums_visible=False,
+        timeline="frame",
+    )
+    assert without_extent is not None
+    assert not any(
+        SCENE_EXTENT_PATH in view.contents for view in _scene_views(without_extent.layout)
+    )

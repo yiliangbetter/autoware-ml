@@ -21,6 +21,7 @@ import pytest
 
 from autoware_ml.visualization.colors import build_label_palette
 from autoware_ml.visualization.common import (
+    build_scene_extent_event,
     build_class_annotation_context,
     build_sample_metadata_events,
     ensure_image_uint8,
@@ -115,3 +116,30 @@ def test_point_cloud_colors_can_render_intensity() -> None:
 def test_point_cloud_colors_requires_intensity_column() -> None:
     with pytest.raises(ValueError, match="intensity column"):
         point_cloud_colors(np.zeros((1, 3), dtype=np.float32), "intensity")
+
+
+def test_build_scene_extent_event_spans_points_and_every_box_yaw() -> None:
+    points = np.array([[0.0, 0.0, 0.0], [1.0, 2.0, 3.0]], dtype=np.float32)
+    boxes = np.array([[10.0, 0.0, 0.0, 2.0, 2.0, 2.0, 0.3]], dtype=np.float32)
+
+    event = build_scene_extent_event(points, (boxes, None))
+
+    assert event is not None
+    assert event.path == "scene/meta/extent"
+    half_diagonal = np.sqrt(12.0) / 2.0
+    np.testing.assert_allclose(event.positions[0], [0.0, -half_diagonal, -half_diagonal], atol=1e-5)
+    np.testing.assert_allclose(event.positions[1], [10.0 + half_diagonal, 2.0, 3.0], atol=1e-5)
+    assert event.colors is not None
+    assert event.colors.shape == (2, 4)
+    assert not event.colors.any(), "the extent must stay invisible"
+    assert event.radii == pytest.approx(1e-3)
+
+
+def test_build_scene_extent_event_is_empty_without_geometry() -> None:
+    assert build_scene_extent_event(None) is None
+    assert (
+        build_scene_extent_event(
+            np.zeros((0, 3), dtype=np.float32), (np.zeros((0, 7), dtype=np.float32), None)
+        )
+        is None
+    )

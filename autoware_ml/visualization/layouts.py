@@ -32,6 +32,10 @@ from autoware_ml.visualization.events import (
     VisualizationEvent,
 )
 
+#: Invisible corner points spanning every drawn entity of a frame, shared by
+#: all scene views so they fit the same initial eye.
+SCENE_EXTENT_PATH = "scene/meta/extent"
+
 _DETECTION_METRIC_LABELS = {
     "precision": "Precision",
     "recall": "Recall",
@@ -101,6 +105,8 @@ def _scene_view(
         contents.append(point_path)
     if detection_path is not None and detection_path in observed_paths:
         contents.append(detection_path)
+    if SCENE_EXTENT_PATH in observed_paths:
+        contents.append(SCENE_EXTENT_PATH)
     overrides = []
     if camera_paths:
         contents.append("scene/cameras/**")
