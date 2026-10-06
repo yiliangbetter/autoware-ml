@@ -23,22 +23,6 @@ class_names:
   - other_stuff
   - noise
 max_label: 31
-class_names:
-  - car
-  - truck
-  - bus
-  - bicycle
-  - pedestrian
-  - traffic_cone
-  - barrier
-  - debris
-  - drivable_surface
-  - other_flat_surface
-  - vegetation
-  - manmade
-  - vertical_thin
-  - other_stuff
-  - noise
 seg_label_mapping:
   0: 14   # noise -> noise
   1: ${nuscenes.segmentation3d.ignore_index}   # animal
