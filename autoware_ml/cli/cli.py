@@ -22,7 +22,6 @@ import logging
 from enum import StrEnum
 from importlib.metadata import version
 from pathlib import Path
-from typing import Annotated
 
 import click
 import typer
