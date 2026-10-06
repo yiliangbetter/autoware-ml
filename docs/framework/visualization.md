@@ -216,7 +216,8 @@ on port `9091`, that keeps both sides on one eye:
   the other. Because both sides have the same structure, the same statistics
   row, and the same shared extent, identical input produces identical eyes.
 - The page hides the viewer panels and drives the frame cursor and playback of
-  both viewers from its own toolbar.
+  both viewers from its own toolbar. The viewer's graphics switches, such as
+  `?renderer=webgl`, are passed from the page address to both embedded viewers.
 
 Selection and double-click focus act on whatever entity is under the cursor on
 each side, so they are the one interaction that can differ between the sides;
