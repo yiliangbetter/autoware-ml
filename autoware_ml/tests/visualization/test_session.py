@@ -93,9 +93,7 @@ def test_session_begins_replacement_frame_and_forwards_timestamp(
 
 
 def test_session_from_config_builds_the_configured_backend() -> None:
-    session = VisualizationSession.from_config(
-        VisualizationSessionConfig(backend="noop")
-    )
+    session = VisualizationSession.from_config(VisualizationSessionConfig(backend="noop"))
 
     session.set_step(0)
     session.log_detection3d(_EMPTY_DETECTION)
@@ -143,9 +141,7 @@ def test_session_logs_segmentation_data(recording_backend: RecordingBackend) -> 
         class_names=["road", "car"],
     )
 
-    assert "scene/ground_truth/segmentation" in recording_backend.paths_of(
-        PointCloud3DEvent
-    )
+    assert "scene/ground_truth/segmentation" in recording_backend.paths_of(PointCloud3DEvent)
 
 
 def test_session_logs_calibration_status(

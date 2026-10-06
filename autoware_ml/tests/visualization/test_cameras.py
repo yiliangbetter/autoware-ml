@@ -106,9 +106,7 @@ def test_build_camera_events_splits_the_extrinsic_into_rotation_and_translation(
 
 
 def test_build_camera_events_honors_the_root_path(camera_image: Path) -> None:
-    events = build_camera_events(
-        {"CAM_FRONT": _camera_entry(camera_image)}, root_path="multiview"
-    )
+    events = build_camera_events({"CAM_FRONT": _camera_entry(camera_image)}, root_path="multiview")
 
     assert all(event.path == "multiview/CAM_FRONT" for event in events)
 
@@ -192,9 +190,7 @@ def test_build_camera_events_projects_ground_truth_and_prediction_boxes(
     ]
     assert len(projections[0].strips) == 12
     assert projections[0].colors is not None
-    np.testing.assert_array_equal(
-        projections[1].class_ids, np.ones((12,), dtype=np.int64)
-    )
+    np.testing.assert_array_equal(projections[1].class_ids, np.ones((12,), dtype=np.int64))
 
 
 def test_build_camera_events_filters_and_caps_projected_points(

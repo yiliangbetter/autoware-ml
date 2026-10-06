@@ -142,9 +142,7 @@ def _yaw_to_quaternions(yaws: np.ndarray) -> np.ndarray:
 class _RerunVisualizationBackendBase:
     """Shared Rerun event translation."""
 
-    def _initialize_recording(
-        self, config: VisualizationSessionConfig, *, spawn: bool
-    ) -> None:
+    def _initialize_recording(self, config: VisualizationSessionConfig, *, spawn: bool) -> None:
         """Initialize one Rerun recording."""
         self.timeline = config.timeline
         self.rr = _load_rerun_module()
@@ -158,9 +156,7 @@ class _RerunVisualizationBackendBase:
         )
         self._fused_blueprint_sent = False
         if config.point_color_mode not in POINT_COLOR_MODES:
-            raise ValueError(
-                "point color mode must be 'semantic', 'intensity', or 'solid'"
-            )
+            raise ValueError("point color mode must be 'semantic', 'intensity', or 'solid'")
         self.point_color_mode = config.point_color_mode
         self.camera_frustums_visible = config.camera_frustums_visible
         self._observed_paths: set[str] = set()
@@ -208,9 +204,7 @@ class _RerunVisualizationBackendBase:
             # Camera frames dominate remote recordings when logged as raw RGB.
             # Rerun preserves the same image entity and projection behavior
             # while JPEG compression substantially reduces memory and transfer.
-            self.rr.log(
-                event.path, self.rr.Image(event.image).compress(jpeg_quality=95)
-            )
+            self.rr.log(event.path, self.rr.Image(event.image).compress(jpeg_quality=95))
             return
 
         if isinstance(event, PointCloud3DEvent):
@@ -311,17 +305,13 @@ class _RerunVisualizationBackendBase:
         """Translate one neutral entity override into Rerun components."""
         components = []
         if override.visible is not None:
-            components.append(
-                self.rr.blueprint.EntityBehavior(visible=override.visible)
-            )
+            components.append(self.rr.blueprint.EntityBehavior(visible=override.visible))
         if override.show_labels is not None:
             components.append(self.rr.Boxes3D(show_labels=override.show_labels))
         if override.series_name is not None or override.marker_size is not None:
             components.extend(
                 [
-                    self.rr.blueprint.VisualizerOverrides(
-                        ["SeriesLines", "SeriesPoints"]
-                    ),
+                    self.rr.blueprint.VisualizerOverrides(["SeriesLines", "SeriesPoints"]),
                     self.rr.SeriesPoints(
                         names=override.series_name,
                         marker_sizes=override.marker_size,
@@ -354,8 +344,7 @@ class _RerunVisualizationBackendBase:
             raise ValueError(f"Unknown layout group kind: {layout.kind}")
 
         overrides = {
-            override.path: self._convert_view_override(override)
-            for override in layout.overrides
+            override.path: self._convert_view_override(override) for override in layout.overrides
         }
         kwargs = {
             "name": layout.name,
@@ -381,12 +370,8 @@ class _RerunVisualizationBackendBase:
                 kwargs["time_ranges"] = [
                     self.rr.blueprint.VisibleTimeRange(
                         layout.timeline or self.timeline,
-                        start=self.rr.blueprint.TimeRangeBoundary.cursor_relative(
-                            seq=start
-                        ),
-                        end=self.rr.blueprint.TimeRangeBoundary.cursor_relative(
-                            seq=end
-                        ),
+                        start=self.rr.blueprint.TimeRangeBoundary.cursor_relative(seq=start),
+                        end=self.rr.blueprint.TimeRangeBoundary.cursor_relative(seq=end),
                     )
                 ]
             return self.rr.blueprint.TimeSeriesView(**kwargs)
@@ -396,21 +381,11 @@ class _RerunVisualizationBackendBase:
         """Translate and publish one backend-neutral blueprint request."""
         parts = [self._convert_layout(event.layout)]
         if event.blueprint_panel_expanded is not None:
-            parts.append(
-                self.rr.blueprint.BlueprintPanel(
-                    expanded=event.blueprint_panel_expanded
-                )
-            )
+            parts.append(self.rr.blueprint.BlueprintPanel(expanded=event.blueprint_panel_expanded))
         if event.selection_panel_expanded is not None:
-            parts.append(
-                self.rr.blueprint.SelectionPanel(
-                    expanded=event.selection_panel_expanded
-                )
-            )
+            parts.append(self.rr.blueprint.SelectionPanel(expanded=event.selection_panel_expanded))
         if event.time_panel_expanded is not None:
-            parts.append(
-                self.rr.blueprint.TimePanel(expanded=event.time_panel_expanded)
-            )
+            parts.append(self.rr.blueprint.TimePanel(expanded=event.time_panel_expanded))
         blueprint_options: dict[str, Any] = {"auto_views": event.auto_views}
         if event.auto_layout is not None:
             blueprint_options["auto_layout"] = event.auto_layout
@@ -439,13 +414,9 @@ class _RerunVisualizationBackendBase:
         if self._explicit_blueprint_received:
             return
         scene_paths = frozenset(
-            path
-            for path in self._observed_paths
-            if path == "scene" or path.startswith("scene/")
+            path for path in self._observed_paths if path == "scene" or path.startswith("scene/")
         )
-        signature = scene_paths | frozenset(
-            f"@camera:{path}" for path in self._camera_paths
-        )
+        signature = scene_paths | frozenset(f"@camera:{path}" for path in self._camera_paths)
         if signature == self._scene_blueprint_signature:
             return
         blueprint = build_scene_blueprint(

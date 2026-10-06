@@ -159,9 +159,7 @@ def _build_single_camera_events(
     cam_name: str,
 ) -> tuple[list[VisualizationEvent], np.ndarray, np.ndarray, tuple[int, int]]:
     """Build the three visualization events for one camera."""
-    missing = [
-        key for key in ("img_path", "cam2img", "lidar2cam") if cam_info.get(key) is None
-    ]
+    missing = [key for key in ("img_path", "cam2img", "lidar2cam") if cam_info.get(key) is None]
     if missing:
         raise ValueError(
             f"Camera {cam_name!r} is missing required calibration keys: {', '.join(missing)}."
@@ -256,17 +254,11 @@ def _build_projected_point_events(
 ) -> list[VisualizationEvent]:
     """Build one persistent point overlay for a camera image."""
     positions = ensure_xyz(layer.points)
-    labels = (
-        as_numpy(layer.labels, np.int64).reshape(-1)
-        if layer.labels is not None
-        else None
-    )
+    labels = as_numpy(layer.labels, np.int64).reshape(-1) if layer.labels is not None else None
     if labels is not None and labels.shape[0] != positions.shape[0]:
         raise ValueError(f"Camera point layer {path!r} labels must align with points")
     colors = as_numpy(layer.colors, np.uint8) if layer.colors is not None else None
-    if colors is not None and (
-        colors.ndim != 2 or colors.shape[0] != positions.shape[0]
-    ):
+    if colors is not None and (colors.ndim != 2 or colors.shape[0] != positions.shape[0]):
         raise ValueError(f"Camera point layer {path!r} colors must align with points")
 
     pixels, source_indices, depths = _project_points(
@@ -282,12 +274,8 @@ def _build_projected_point_events(
     events: list[VisualizationEvent] = []
     projected_labels = labels[source_indices] if labels is not None else None
     if projected_labels is not None:
-        palette = build_label_palette(
-            resolve_palette_size([projected_labels], layer.class_names)
-        )
-        annotation_context = build_class_annotation_context(
-            path, palette, layer.class_names
-        )
+        palette = build_label_palette(resolve_palette_size([projected_labels], layer.class_names))
+        annotation_context = build_class_annotation_context(path, palette, layer.class_names)
         if annotation_context is not None:
             events.append(annotation_context)
         projected_colors = labels_to_colors(
@@ -329,9 +317,7 @@ def _box_corners(box: np.ndarray) -> np.ndarray:
         dtype=np.float32,
     )
     cosine, sine = float(np.cos(box[6])), float(np.sin(box[6]))
-    corners[:, :2] = corners[:, :2] @ np.array(
-        [[cosine, sine], [-sine, cosine]], dtype=np.float32
-    )
+    corners[:, :2] = corners[:, :2] @ np.array([[cosine, sine], [-sine, cosine]], dtype=np.float32)
     return corners + box[:3]
 
 
@@ -347,13 +333,9 @@ def _project_box_edges(
     box_indices: list[int] = []
     for box_index, box in enumerate(boxes):
         corners = _box_corners(box)
-        homogeneous = np.concatenate(
-            (corners, np.ones((8, 1), dtype=np.float32)), axis=1
-        )
+        homogeneous = np.concatenate((corners, np.ones((8, 1), dtype=np.float32)), axis=1)
         camera_corners = (extrinsic @ homogeneous.T).T[:, :3]
-        valid_edges = [
-            edge for edge in _BOX_EDGES if np.all(camera_corners[list(edge), 2] > 1e-5)
-        ]
+        valid_edges = [edge for edge in _BOX_EDGES if np.all(camera_corners[list(edge), 2] > 1e-5)]
         if not valid_edges:
             continue
         projected = camera_corners @ intrinsic.T

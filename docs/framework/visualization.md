@@ -184,6 +184,47 @@ The explicit scene layout contains:
 The three point-cloud tabs make the coloring mode selectable in the viewer.
 `--point-color-mode` only chooses which one is initially active.
 
+Every scene view also lists `scene/meta/extent`, two invisible corner points
+spanning the LiDAR points and every GT and predicted box of the frame. Rerun
+fits the initial eye of a 3D view to the bounds of what that view shows, so
+without the shared extent the GT and prediction views would start from slightly
+different eyes whenever only one of them shows a box that sticks out of the
+point cloud.
+
+### Synced comparison page
+
+Rerun keeps one eye per 3D view and offers no way to link two views, so the
+prediction and comparison views of the layout above drift apart as soon as one
+of them is rotated. `--sync-views` therefore serves a second page, by default
+on port `9091`, that keeps both sides on one eye:
+
+- The page embeds two complete Rerun web viewers in two same-origin frames,
+  served through `visualization/synced_viewer.py`, which proxies the viewer
+  bundle from the Rerun web server and exposes the viewer handle on its page.
+  Both frames connect to the same gRPC stream as the regular page.
+- `build_synced_scene_layouts` derives one full-size scene view per side and
+  variant from the same entity paths as the regular layout: the prediction on
+  the left, and GT, intensity, entropy, or probability on the right, each with
+  camera projections off or on. The backend saves every variant as a blueprint
+  file and publishes a manifest; the page loads the selected variant into each
+  frame through the viewer handle.
+- All variants of a side share one `ViewSpec.identity`, which the Rerun backend
+  turns into a stable view id. Rerun keys the viewer state, including the eye,
+  by that id, so switching the comparison or the camera projections keeps the
+  current viewpoint instead of resetting it.
+- The page mirrors pointer, wheel, and keyboard events from either frame into
+  the other. Because both sides have the same structure, the same statistics
+  row, and the same shared extent, identical input produces identical eyes.
+- The page hides the viewer panels and drives the frame cursor and playback of
+  both viewers from its own toolbar.
+
+Selection and double-click focus act on whatever entity is under the cursor on
+each side, so they are the one interaction that can differ between the sides;
+the toolbar's **Reload layout** button reapplies the layouts, and the time
+controls resynchronize the frame cursor. The page depends on the line of the
+Rerun 0.23.1 viewer page that creates the viewer handle; the proxy fails with
+HTTP 502 and a log message if a different viewer bundle no longer contains it.
+
 ### Detection 3D
 
 The detection adapter can log:
@@ -277,7 +318,8 @@ autoware-ml visualize \
     --sample-index 0 \
     --max-samples 1 \
     --prediction-frequency-hz 10 \
-    --point-color-mode semantic
+    --point-color-mode semantic \
+    --sync-views
 ```
 
 This path:

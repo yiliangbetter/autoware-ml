@@ -54,9 +54,7 @@ class VisualizationSessionConfig:
         if not self.server_memory_limit.strip():
             raise ValueError("server_memory_limit must not be empty")
         if self.point_color_mode not in {"semantic", "intensity", "solid"}:
-            raise ValueError(
-                "point color mode must be 'semantic', 'intensity', or 'solid'"
-            )
+            raise ValueError("point color mode must be 'semantic', 'intensity', or 'solid'")
 
 
 class VisualizationBackend(Protocol):

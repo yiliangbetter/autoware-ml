@@ -154,7 +154,9 @@ autoware-ml visualize \
     [--camera-frustums/--no-camera-frustums] \
     [--web-port PORT] \
     [--grpc-port PORT] \
-    [--wait/--no-wait]
+    [--wait/--no-wait] \
+    [--sync-views/--no-sync-views] \
+    [--sync-port PORT]
 ```
 
 **Arguments:**
@@ -178,6 +180,8 @@ autoware-ml visualize \
 - `--grpc-port`: Rerun SDK gRPC port used by the web viewer proxy (default: `9876`)
 - `--wait` / `--no-wait`: Keep the Rerun web server alive after logging (default: `--wait`)
 - `--recording-id`: Optional explicit recording ID
+- `--sync-views` / `--no-sync-views`: Also serve the synced comparison page, which shows the prediction and one selectable comparison in two viewers that share one eye: rotating, panning, zooming, or flying in either side moves both (default: `--no-sync-views`)
+- `--sync-port`: HTTP port of the synced comparison page (default: `9091`)
 
 Backend modes:
 
@@ -189,6 +193,16 @@ one 1 Hz GT anchor can additionally produce nine prediction-only frames at the
 default 10 Hz setting. Those frames use only their current LiDAR sweep and do
 not interpolate or retain GT.
 
+The 3D views of the regular Rerun page each keep their own eye. To compare the
+prediction with GT, intensity, entropy, or probability from exactly the same
+viewpoint, add `--sync-views` and open `http://localhost:<sync-port>/`. The
+page embeds two viewers side by side, mirrors the mouse and keyboard input of
+one into the other, and offers the comparison, the camera projections, and the
+frame cursor in its toolbar. Forward `--sync-port` together with the other two
+ports when running in Docker; the page connects to `--grpc-port` directly, so
+keep that port reachable from the browser. See
+[Visualization Design](../framework/visualization.md#synced-comparison-page).
+
 **Example:**
 
 ```bash
@@ -198,6 +212,18 @@ autoware-ml visualize \
     --split test \
     --sample-index 0 \
     --backend rerun
+```
+
+Compare prediction and ground truth from one shared viewpoint:
+
+```bash
+autoware-ml visualize \
+    --config-name multi/ptv3/voxel012_122m_t4dataset_j6gen2 \
+    --weights mlruns/multi/ptv3/voxel012_122m_t4dataset_j6gen2/<run_id>/artifacts/checkpoints/last.ckpt \
+    --split test \
+    --max-samples 3 \
+    --sync-views \
+    --sync-port 9091
 ```
 
 Preview transformed data only, without weights:
