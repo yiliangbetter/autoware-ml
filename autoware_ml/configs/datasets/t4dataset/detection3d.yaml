@@ -71,9 +71,6 @@ name_mapping:
   barrier: barrier
   movable_object.barrier: barrier
   construction_sign: barrier
-  movable_object.debris: barrier
-  pushable_pullable: barrier
-  movable_object.pushable_pullable: barrier
   traffic_cone: traffic_cone
   trafficcone: traffic_cone
   movable_object.traffic_cone: traffic_cone
