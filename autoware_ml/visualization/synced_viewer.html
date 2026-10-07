@@ -324,6 +324,14 @@
       const frameLabel = byId("frame-label");
       const playButton = byId("play");
       let shownTime = null;
+      // A viewer applies set_time_for_timeline asynchronously, and it keeps
+      // advancing by itself while the recording is still streaming. Both make
+      // a reading taken right after a write disagree with the frame the page
+      // just asked for, so the poller below must not mistake either for a
+      // manual scrub inside a viewer and undo the step.
+      const ADOPT_GRACE_MS = 1500;
+      let graceUntil = 0;
+      let candidateTime = null;
       function showTime(time) {
         shownTime = time;
         slider.value = time;
@@ -338,6 +346,25 @@
           }
         }
         showTime(time);
+        graceUntil = performance.now() + ADOPT_GRACE_MS;
+        candidateTime = null;
+      }
+      function setPlaying(playing) {
+        for (const side of SIDES) {
+          try {
+            handles[side].set_playing(stores[side], playing);
+          } catch (error) {
+            console.warn(`could not change the playback of the ${side} viewer`, error);
+          }
+        }
+        playButton.textContent = playing ? "Pause" : "Play";
+      }
+      // Stepping by hand wins over playback: a viewer that is still following
+      // the incoming recording would otherwise pull the timeline forward again
+      // on the next poll.
+      function stepTo(time) {
+        setPlaying(false);
+        setTime(time);
       }
       setInterval(() => {
         const range = timelineRange("left") || timelineRange("right");
@@ -345,28 +372,35 @@
           slider.min = range.min;
           slider.max = range.max;
         }
-        const times = SIDES.map(currentTime);
-        const changed = times.find((time) => time !== null && time !== shownTime);
-        if (changed !== undefined) {
-          setTime(changed);
+        const times = SIDES.map(currentTime).filter((time) => time !== null);
+        const settled = times.length > 0 && times.every((time) => time === shownTime);
+        if (settled) {
+          graceUntil = 0;
+          candidateTime = null;
+        } else if (performance.now() >= graceUntil) {
+          // Follow a viewer only once both sides report the same new frame on
+          // two consecutive polls, so that a half-applied write or a single
+          // stale reading never moves the timeline on its own.
+          const agreed =
+            times.length === SIDES.length && times.every((time) => time === times[0])
+              ? times[0]
+              : null;
+          if (agreed !== null && agreed !== shownTime && agreed === candidateTime) {
+            setTime(agreed);
+          } else {
+            candidateTime = agreed;
+          }
         }
         try {
-          const playing = handles.left.get_playing(stores.left);
-          playButton.textContent = playing ? "Pause" : "Play";
+          playButton.textContent = handles.left.get_playing(stores.left) ? "Pause" : "Play";
         } catch (error) {
           // The viewer may not have a time control yet.
         }
       }, 250);
-      slider.oninput = () => setTime(Number(slider.value));
-      byId("prev").onclick = () => setTime(Math.max(Number(slider.min), Number(slider.value) - 1));
-      byId("next").onclick = () => setTime(Math.min(Number(slider.max), Number(slider.value) + 1));
-      playButton.onclick = () => {
-        const playing = playButton.textContent === "Play";
-        for (const side of SIDES) {
-          handles[side].set_playing(stores[side], playing);
-        }
-        playButton.textContent = playing ? "Pause" : "Play";
-      };
+      slider.oninput = () => stepTo(Number(slider.value));
+      byId("prev").onclick = () => stepTo(Math.max(Number(slider.min), Number(slider.value) - 1));
+      byId("next").onclick = () => stepTo(Math.min(Number(slider.max), Number(slider.value) + 1));
+      playButton.onclick = () => setPlaying(playButton.textContent === "Play");
 
       window.autowareSyncedViewer = { handles, stores, frames, state, mirrorStats, applyLayouts };
       setStatus("synced");
