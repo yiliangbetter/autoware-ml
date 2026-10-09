@@ -127,8 +127,8 @@ PAUSE_FILE_NAME = "PAUSE_TRAIN"
 ACTIVE_FILE_NAME = "training.active"
 # Force-added so they apply whether or not the datamodule config declares them.
 BENCHMARK_OVERRIDES = (
-    "++datamodule.val_dataloader.batch_size=1",
-    "++datamodule.val_dataloader.persistent_workers=false",
+    "++datamodule.validation_dataloader.batch_size=1",
+    "++datamodule.validation_dataloader.persistent_workers=false",
 )
 STATIC_ENCODER_PARAMS = "encoder_params"
 
