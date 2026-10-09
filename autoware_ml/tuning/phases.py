@@ -770,7 +770,7 @@ def encoder_stage_counter(model: Any) -> Callable[[ModelGTBatch], Sequence[int]]
 
     def count(batch: ModelGTBatch) -> Sequence[int]:
         prepared = model.on_after_batch_transfer(batch, 0)
-        inputs = model.bind_forward_inputs(prepared)
+        inputs = model.forward_inputs(prepared)
         deepest = encoder(
             {key: inputs[key] for key in ("coord", "feat", "grid_coord", "offset") if key in inputs}
         )
