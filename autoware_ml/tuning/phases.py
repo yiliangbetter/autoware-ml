@@ -737,27 +737,27 @@ def evaluate_trial(
         benchmark_cfg = context.config.compose([*overrides, *BENCHMARK_OVERRIDES])
         benchmark_datamodule = hydra.utils.instantiate(benchmark_cfg.datamodule)
         benchmark_datamodule.setup("validate")
+        model.to(device).eval()
+
+        def forward(batch: ModelGTBatch) -> Any:
+            prepared = model.on_after_batch_transfer(batch, 0)
+            return model(**model.forward_inputs(prepared))
+
+        report = benchmark_latency(
+            forward,
+            benchmark_datamodule.val_dataloader(),
+            device=device,
+            precision=str(latency_settings.get("precision", "fp32")),
+            frames=int(latency_settings.get("frames", 50)),
+            warmup=int(latency_settings.get("warmup", 10)),
+            repeats=int(latency_settings.get("repeats", 5)),
+            stage_counter=encoder_stage_counter(model),
+        )
     except Exception:  # noqa: BLE001 - the proxy is informational, the accuracy is not
         logger.exception(
-            "Trial %d: proxy latency setup failed; recording the accuracy only", trial.number
+            "Trial %d: proxy latency failed; recording the accuracy only", trial.number
         )
         return TrialEvaluation(metrics=metrics)
-    model.to(device).eval()
-
-    def forward(batch: ModelGTBatch) -> Any:
-        prepared = model.on_after_batch_transfer(batch, 0)
-        return model(**model.bind_forward_inputs(prepared))
-
-    report = benchmark_latency(
-        forward,
-        benchmark_datamodule.val_dataloader(),
-        device=device,
-        precision=str(latency_settings.get("precision", "fp32")),
-        frames=int(latency_settings.get("frames", 50)),
-        warmup=int(latency_settings.get("warmup", 10)),
-        repeats=int(latency_settings.get("repeats", 5)),
-        stage_counter=encoder_stage_counter(model),
-    )
     return TrialEvaluation(metrics=metrics, latency=report)
 
 
