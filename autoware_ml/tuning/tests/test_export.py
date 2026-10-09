@@ -129,3 +129,94 @@ def test_legacy_feat4_spec_takes_four_features_and_keeps_the_rest() -> None:
     assert torch.equal(feat[:, :3], voxels[:, 0, :3])
     assert grid_coord.shape == (6, 3) and pooling.shape == (1, 6)
     assert LEGACY_CONTRACT == "legacy_feat4"
+
+
+def test_legacy_feat4_spec_pads_a_convolution_stem_to_an_aligned_width() -> None:
+    import torch
+    from torch import nn
+
+    from autoware_ml.tuning.export import legacy_feat4_encoder_spec
+
+    class SubMConv3d(nn.Module):  # the exportable sparse conv, by name
+        def __init__(
+            self,
+            in_channels,
+            out_channels,
+            kernel_size,
+            stride=1,
+            padding=0,
+            dilation=1,
+            groups=1,
+            bias=True,
+            indice_key=None,
+            algo=None,
+            fp32_accum=None,
+            name=None,
+        ):
+            super().__init__()
+            self.in_channels, self.out_channels, self.kernel_size = (
+                in_channels,
+                out_channels,
+                kernel_size,
+            )
+            self.stride, self.padding, self.dilation, self.groups = (
+                stride,
+                padding,
+                dilation,
+                groups,
+            )
+            self.indice_key, self.algo, self.fp32_accum, self.name = (
+                indice_key,
+                algo,
+                fp32_accum,
+                name,
+            )
+            self.weight = nn.Parameter(torch.zeros(out_channels, in_channels))
+            self.bias = None if not bias else nn.Parameter(torch.zeros(out_channels))
+
+        def forward(self, feat):
+            return feat @ self.weight.t()
+
+    class Embedding(nn.Module):
+        def __init__(self) -> None:
+            super().__init__()
+            self.stem = nn.Sequential(
+                SubMConv3d(11, 32, 3, bias=False, indice_key="stem"), nn.Identity()
+            )
+
+    class Encoder(nn.Module):
+        def __init__(self) -> None:
+            super().__init__()
+            self.embedding = Embedding()
+
+    class VoxelEncoder(nn.Module):
+        out_channels = 11
+
+    class Inner(nn.Module):
+        def __init__(self) -> None:
+            super().__init__()
+            self.voxel_encoder = VoxelEncoder()
+            self.encoder = Encoder()
+
+        def forward(self, voxels, num_points, grid_coord, *rest):
+            feat = self.voxel_encoder(voxels, num_points)
+            return (self.encoder.embedding.stem(feat), grid_coord, *rest)
+
+    from autoware_ml.utils.deploy import ExportSpec
+
+    voxels = torch.rand(5, 2, 5)
+    spec = ExportSpec(
+        module=Inner(),
+        args=(voxels, torch.ones(5), torch.zeros(5, 3, dtype=torch.int32)),
+        input_param_names=["voxels", "num_points_per_voxel", "grid_coord"],
+        output_names=["point_feat_0"],
+        dynamic_axes={"voxels": {0: "num_voxels"}, "grid_coord": {0: "num_voxels"}},
+    )
+    legacy = legacy_feat4_encoder_spec(spec, torch.device("cpu"))
+    stem = legacy.module.inner.encoder.embedding.stem[0]
+    assert stem.in_channels == 16 and stem.out_channels == 32 and stem.indice_key == "stem"
+    (
+        out,
+        _grid,
+    ) = legacy.module(*legacy.args)[:2]
+    assert out.shape == (5, 32)

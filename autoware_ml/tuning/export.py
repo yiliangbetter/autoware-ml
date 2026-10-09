@@ -52,6 +52,7 @@ LEGACY_CONTRACT = "legacy_feat4"
 CONTRACTS = (MAIN_CONTRACT, LEGACY_CONTRACT)
 LEGACY_FEATURE_CHANNELS = 4
 LEGACY_FEATURE_INPUT = "feat"
+LEGACY_STEM_ALIGNMENT = 8
 # A fixed, distinguishable colour ladder; the node only checks the length.
 _PALETTE = (
     (0, 150, 245),
@@ -182,6 +183,40 @@ def render_ml_package_params(cfg: DictConfig | Mapping[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def _find_stem_conv(encoder: Any) -> tuple[Any, str, Any] | None:
+    """Return ``(parent, name, module)`` of the embedding stem's sparse convolution, if any."""
+    embedding = getattr(encoder, "embedding", None)
+    if embedding is None:
+        return None
+    stack = [embedding]
+    while stack:
+        parent = stack.pop()
+        for name, child in parent.named_children():
+            if type(child).__name__ == "SubMConv3d" and hasattr(child, "in_channels"):
+                return parent, name, child
+            stack.append(child)
+    return None
+
+
+def _rebuild_stem_conv(child: Any, in_channels: int) -> Any:
+    """Return a copy of a sparse stem convolution taking ``in_channels`` inputs, freshly initialized."""
+    rebuilt = type(child)(
+        in_channels,
+        child.out_channels,
+        kernel_size=child.kernel_size,
+        stride=child.stride,
+        padding=child.padding,
+        dilation=child.dilation,
+        groups=child.groups,
+        bias=child.bias is not None,
+        indice_key=child.indice_key,
+        algo=child.algo,
+        fp32_accum=child.fp32_accum,
+        name=getattr(child, "name", None),
+    )
+    return rebuilt.to(device=child.weight.device, dtype=child.weight.dtype)
+
+
 def legacy_feat4_encoder_spec(spec: Any, device: Any) -> Any:
     """Rewrite an encoder export spec to the ``legacy_feat4`` contract.
 
@@ -209,6 +244,17 @@ def legacy_feat4_encoder_spec(spec: Any, device: Any) -> Any:
         raise ValueError(f"Unexpected encoder inputs for the legacy contract: {names[:3]}")
     voxels, _num_points, grid_coord, *rest = spec.args
     stem_width = int(spec.module.voxel_encoder.out_channels)
+    stem_conv = _find_stem_conv(getattr(spec.module, "encoder", None))
+    if stem_conv is not None:
+        # spconv's ImplicitGemm plugin needs the convolution stem's input width
+        # aligned (an 11-channel stem fails with a misaligned address on the
+        # target), so the stem is rebuilt on the next multiple of eight channels
+        # and the adapter pads up to it. The stem is a negligible share of the
+        # graph, and the same padding applies to every architecture.
+        parent, name, child = stem_conv
+        stem_width = -(-stem_width // LEGACY_STEM_ALIGNMENT) * LEGACY_STEM_ALIGNMENT
+        parent._modules[name] = _rebuild_stem_conv(child, stem_width)
+        logger.info("Legacy contract: convolution stem rebuilt on %d input channels", stem_width)
 
     class _LegacyFeatureAdapter(nn.Module):
         """Stand-in for the voxel feature encoder: four node features to the stem width."""
