@@ -190,16 +190,22 @@ phases that each run as their own batch:
    observations instead of its random phase. They only lack a bench latency.
 3. `tune screen` asks the sampler for trials, exports each with its initial
    weights, ships the package to the bench and runs the inference harness
-   there. The reference trial goes first because the latency bound derives
-   from it. A trial slower than the bound is told to the sampler as an
-   infeasible pruned trial and never trains; a faster one joins the training
-   queue. The phase only touches the bench inside its configured window.
+   there. The reference models and the reference trial go first because the
+   latency bound derives from them. A trial slower than the bound is told to
+   the sampler as an infeasible pruned trial and never trains; a faster one
+   joins the training queue. The phase only touches the bench inside its
+   configured window, if any, and starts a job only once the bench's idle
+   check passes.
 4. `tune train` trains the queued trials, each in its own subprocess and
    MLflow run. A trial that finishes with a `best.ckpt` is marked `trained`;
-   one that fails is reported to the sampler as failed.
+   one that runs out of GPU memory is queued once more with the
+   `oom_retry` overrides; one that fails otherwise is reported to the
+   sampler as failed.
 5. `tune measure` re-validates every trained checkpoint with its own
    configuration, stores the metrics, tells the sampler the objective and
-   every constraint, and then evaluates the termination criterion.
+   every constraint, and then evaluates the termination criterion. While a
+   relative latency bound's reference is still unmeasured the trained
+   trials wait, at no cost in attempts.
 6. `tune status` prints the trials, the latency bound, the best feasible
    trial and the termination verdict.
 
@@ -235,33 +241,39 @@ tuning:
     - { name: val/seg3d/mIoU, direction: maximize }
   constraints:
     - { metric: val/seg3d/recall_debris, min: 0.35 }
-    - { source: latency, name: latency_ms, reference: litept_tiny, margin_ms: 0.1 }
+    - { source: latency, name: latency_ms, reference: ptv3_tiny, margin_ms: 0.0 }
   latency: { proxy: true, frames: 50, warmup: 10, repeats: 5, precision: fp32 }
   bench:
     host: sensing-bench.local
     exchange: { local: /nas_litept/bench, remote: /mnt/fdd_nas/.../bench }
     harness: { repo: /mnt/fdd_nas/.../ptv3-inference-benchmarks, command: "... uv run --frozen" }
-    variant: { prefix: lt2, adapter: v12, sources: { autoware_universe: owner/repo@sha } }
+    variant: { prefix: lt3, adapter: v12, sources: { autoware_universe: owner/repo@sha } }
     reference: litept_tiny
     window: { start: "18:00", end: "09:00", timezone: Asia/Tokyo }
+    idle: { command: "! pgrep -x trtexec && [ -z \"$(nvidia-smi --query-compute-apps=pid --format=csv,noheader)\" ]", poll_s: 60, max_wait_s: 21600 }
     queue: { target: 3, target_before_close: 10, close_buffer_hours: 2.5 }
   terminator: { improvement: regret_bound, error: static, constant: 0.004, min_n_trials: 20 }
+  oom_retry: { overrides: [batch_size=4, trainer.accumulate_grad_batches=4], max_retries: 1 }
   reference_trials:
     litept_tiny: { grid_size: 0.12, width_preset: tiny, ... }
+  reference_models:
+    ptv3_tiny: { config_name: segmentation3d/ptv3/voxel012_122m_t4dataset_j6gen2, overrides: [] }
 ```
 
 | Key                                | Meaning                                                                                                                                                                                                                                                                                                                  |
 | ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `max_trained_trials`               | Trainings the study pays for. Screened-out and imported trials are free and do not count.                                                                                                                                                                                                                                |
 | `objectives`                       | Ordered objectives. `source: metric` reads a logged validation metric, `source: latency` the trial's latency in milliseconds. One objective enables the termination criterion.                                                                                                                                           |
-| `constraints`                      | Bounds the sampler is told about. A `metric` entry takes `min` and `max`. A `source: latency` entry takes `max`, or `reference` and `margin_ms`: the bound is that reference trial's measured latency plus the margin. A violating trial keeps its value, so nothing measured is discarded, but it never counts as best. |
+| `constraints`                      | Bounds the sampler is told about. A `metric` entry takes `min` and `max`. A `source: latency` entry takes `max`, or `reference` and `margin_ms`: the bound is the measured latency of that reference trial or reference model plus the margin. A violating trial keeps its value, so nothing measured is discarded, but it never counts as best. |
 | `static_filter.max_encoder_params` | Rejects a proposal before it trains when its estimated encoder size exceeds the budget.                                                                                                                                                                                                                                  |
 | `latency`                          | Eager proxy settings: untimed warmup frames, timed frames, repetitions per frame, autocast precision. `proxy: false` skips it. With a bench it is recorded for comparison only.                                                                                                                                          |
 | `bench`                            | The bench, see below. Omit it or set `enabled: false` for the proxy-only workflow.                                                                                                                                                                                                                                       |
 | `terminator`                       | Optuna's termination criterion, see below. Omit it to run to the budget.                                                                                                                                                                                                                                                 |
 | `measure.max_attempts`             | Evaluation attempts before a trial is failed. A crashed measurement is retried by running `tune measure` again.                                                                                                                                                                                                          |
 | `train_overrides`                  | Overrides applied to every trial's training.                                                                                                                                                                                                                                                                             |
-| `reference_trials`                 | Named parameter sets queued first. Values must lie inside the search space. The one `bench.reference` names anchors the latency bound.                                                                                                                                                                                   |
+| `reference_trials`                 | Named parameter sets queued first. Values must lie inside the search space. The one `bench.reference` names is screened first and may anchor the latency bound.                                                                                                                                                          |
+| `reference_models`                 | Named configurations outside the search space (`config_name` and `overrides`), such as the deployed PTv3, that the screen phase exports with their initial weights and times before any trial. They never train; their measurement lives on the study, and a latency constraint may name one as its reference.          |
+| `oom_retry`                        | Overrides for one more attempt at a trial whose training ran out of GPU memory (`overrides`, typically a smaller batch with more accumulation so the schedule is unchanged) and how often a trial may take it (`max_retries`). Bench workflow only.                                                                      |
 
 Every trial is a regular MLflow run tagged with `optuna_study` and
 `optuna_trial`, and its measurement is mirrored onto the run as `tune/*`
@@ -291,7 +303,8 @@ exchange and removes what it created on the bench.
 | `max_ci95_ms`                                          | Widest replicate interval accepted. The bench is shared; a wider spread means another job ran alongside, so the measurement is repeated instead of told.                                                                                               |
 | `unbuildable_violation_ms`                             | Latency violation recorded for an architecture whose engines do not build on the target at the deployed profile. It cannot be deployed, so it is told as infeasible rather than retried; an imported trial keeps its accuracy.                         |
 | `reference`                                            | Name of the reference trial whose latency anchors the relative bound. It is measured first.                                                                                                                                                            |
-| `window`                                               | Daily interval during which the bench may be used; an end before the start wraps past midnight. Outside it `tune screen` returns at once.                                                                                                              |
+| `window`                                               | Daily interval during which the bench may be used; an end before the start wraps past midnight. Outside it `tune screen` returns at once. Omit it, or set it to `null`, to keep the bench open around the clock.                                        |
+| `idle`                                                 | A shell command run on the bench before every job (`command`); a non-zero exit means someone else is using the bench and the job waits, polling every `poll_s` seconds for up to `max_wait_s`. A wait that runs out is not counted against the trial.  |
 | `queue`                                                | How many screened trials to keep waiting for the trainer while the window is open (`target`) and to reach before it closes (`target_before_close`, applied during the last `close_buffer_hours`).                                                      |
 | `job`                                                  | Per-job timeout, attempts before a trial is failed, and whether variants and packages are kept.                                                                                                                                                        |
 

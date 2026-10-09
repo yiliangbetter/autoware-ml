@@ -85,12 +85,17 @@ spent on an architecture that is too slow.
 The sampler draws scalars, so the per-stage lists are named presets in
 `autoware_ml/tuning/presets.py`. Every preset keeps each width divisible by
 its head count and, wherever possible, 18 channels per head so the rotary
-embedding rotates the whole head.
+embedding rotates the whole head. The exceptions are `tiny` and `large`,
+which use 16 channels per head: `tiny` because it is PTv3-tiny's ladder,
+`large` because 16 is the head size whose stage-4 TensorRT engine builds on
+the target at every patch size (the 18-channel presets fail beyond patch 256
+at the deployed profile), and a rung above the published widths is only
+worth sampling if it can be deployed.
 
 | Parameter           | Values                           | Notes                                                                                                                                                                                                                         |
 | ------------------- | -------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `grid_size`         | 0.10 to 0.18 m                   | The largest latency lever; coarse grids collapse small classes such as debris.                                                                                                                                                |
-| `width_preset`      | base, medium, tiny, small, micro | Encoder and decoder widths and head counts. `tiny` is PTv3-tiny's ladder and the only preset with 16 channels per head, kept as the comparability anchor.                                                                     |
+| `width_preset`      | large, base, medium, tiny, small, micro | Encoder and decoder widths and head counts. `tiny` is PTv3-tiny's ladder, kept as the comparability anchor; `large` (48 to 768 channels) sits one rung above the published widths for studies whose latency bound allows it. |
 | `conv_depth_preset` | 2-2-2, 1-1-1                     | Blocks in the three convolution stages. Each block costs the same arithmetic at every stage because width doubles as the point count quarters.                                                                                |
 | `attn_depth_preset` | 6-2, 4-2, 2-2, 2-1               | Blocks in the two attention stages. A block here carries far more parameters and kernel launches than a convolution block. A stage of depth d reads d serialization orders, so even depths match the two the export declares. |
 | `dec_depth_preset`  | none, light                      | Decoder blocks: unpooling only, or PTv3-tiny's two attention blocks.                                                                                                                                                          |
@@ -117,15 +122,21 @@ are candidates for a follow-up study once an architecture is chosen.
 
 ### Objective and constraints
 
-The study maximizes mIoU under two constraints. Debris recall below 0.35
-marks a trial infeasible: the class is the small-object proxy, and the bound
-sits 1.5 standard deviations of the run-to-run noise below the best
-architecture of the first study, where 0.4 rejected that architecture two
-runs in seven. Deployed latency above the reference trial's plus 0.1 ms
-marks a trial infeasible as well; the reference is LitePT-tiny, measured by
-the same harness on the same bench, so the question the study answers is the
-most accurate model that is no slower than the deployed one. An infeasible
-trial keeps its value for the sampler but never counts as the best.
+The study maximizes mIoU under a deployed-latency constraint, with an
+optional accuracy guard. The latency bound is relative to a reference
+measured by the same harness on the same bench, so the question the study
+answers is the most accurate model that is no slower than a known one. The
+reference is either a reference trial inside the search space (LitePT-tiny,
+the bound of the second study, plus 0.1 ms) or a reference model outside it
+(`tuning.reference_models`: the third study bounds every trial by the
+deployed PTv3-tiny, exported and timed the same way, with no margin). A
+debris recall bound (0.35 in the second study: the class is the small-object
+proxy, and the bound sits 1.5 standard deviations of the run-to-run noise
+below the best architecture of the first study, where 0.4 rejected that
+architecture two runs in seven) is a `metric` constraint the study config
+may add; the third study records debris recall, the far-range slices and the
+grouped-vehicle IoU without enforcing them. An infeasible trial keeps its
+value for the sampler but never counts as the best.
 
 Latency is measured before training with the model's initial weights, on
 the ADM-AL30 bench through the `ptv3-inference-benchmarks` harness, seven
