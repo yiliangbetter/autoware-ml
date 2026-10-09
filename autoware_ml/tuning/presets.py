@@ -38,11 +38,13 @@ ATTN_STAGE_COUNT = STAGE_COUNT - CONV_STAGE_COUNT
 ROPE_AXES = 3
 ROPE_MIN_HEAD_DIM = 6
 
-# Width of the voxel feature the encoder reads, mirroring OUTPUT_CHANNELS in
-# autoware_ml.models.segmentation3d.encoders.voxel. Duplicated rather than imported
-# to keep this module torch-free; test_estimate_matches_the_real_encoder compares the
-# estimate against the real encoder's default and fails if the two drift apart.
-ENCODER_INPUT_CHANNELS = 17
+# Width of the voxel feature the encoder reads: the sweep-split voxel feature
+# encoder's output (point channels plus one side window), which the shipped
+# encoder configs pass as ``in_channels``. Duplicated rather than imported to
+# keep this module torch-free; test_estimate_matches_the_real_encoder compares
+# the estimate against the real encoder built at this width and fails if the
+# two drift apart.
+ENCODER_INPUT_CHANNELS = 11
 
 LINEAR_STEM = "linear"
 CONV_STEM = "conv"
@@ -148,6 +150,20 @@ class WidthPreset:
 WIDTH_PRESETS: Mapping[str, WidthPreset] = {
     preset.name: preset
     for preset in (
+        # One rung above the published widths, added when the latency bound
+        # moved from LitePT-tiny's to PTv3-tiny's: the ladder below tops out
+        # at about 9 M encoder parameters, and the question under the wider
+        # bound is whether a wider model at a coarser grid beats a narrow one
+        # at a fine grid. 16 channels per head, like ``tiny``, because that is
+        # the head size whose TensorRT engines build on the target at every
+        # patch size; the 18-channel presets fail at stage 4 beyond patch 256.
+        WidthPreset(
+            "large",
+            (48, 96, 192, 384, 768),
+            (3, 6, 12, 24, 48),
+            (96, 96, 192, 384),
+            (6, 6, 12, 24),
+        ),
         # The published LitePT parametrization: 18 channels per head everywhere.
         WidthPreset(
             "base", (36, 72, 144, 252, 504), (2, 4, 8, 14, 28), (72, 72, 144, 252), (4, 4, 8, 14)

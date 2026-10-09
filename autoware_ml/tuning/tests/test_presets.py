@@ -51,8 +51,9 @@ def test_rope_frequencies_per_axis() -> None:
 def test_width_presets_keep_one_head_dim_and_rotate_most_of_it(name: str) -> None:
     preset = WIDTH_PRESETS[name]
     assert preset.head_dim >= presets.ROPE_MIN_HEAD_DIM
-    # tiny is the PTv3 comparability anchor and knowingly leaves 4 dims unrotated.
-    assert preset.fully_rotated or name == "tiny"
+    # tiny is the PTv3 comparability anchor and knowingly leaves 4 dims unrotated;
+    # large shares its 16-channel heads because those are the ones that build.
+    assert preset.fully_rotated or name in ("tiny", "large")
 
 
 def test_shipped_configs_are_expressible() -> None:
@@ -98,6 +99,7 @@ def test_estimate_matches_the_real_encoder(name: str, attn_depth: str) -> None:
     preset = WIDTH_PRESETS[name]
     depths = encoder_depths("2-2-2", attn_depth)
     encoder = LitePTEncoder(
+        in_channels=presets.ENCODER_INPUT_CHANNELS,
         enc_channels=preset.enc_channels,
         enc_num_head=preset.enc_num_head,
         enc_depths=depths,
@@ -106,11 +108,20 @@ def test_estimate_matches_the_real_encoder(name: str, attn_depth: str) -> None:
     assert _count(encoder) == estimate_encoder_parameters(preset.enc_channels, depths, 3)
 
 
+def test_encoder_input_width_matches_the_shipped_config() -> None:
+    # The estimate's input width must follow the width the task configs pass
+    # to the encoder, which is the sweep-split voxel feature encoder's output.
+    from autoware_ml.models.segmentation3d.encoders.voxel import SweepSplitVoxelFeatureEncoder
+
+    assert presets.ENCODER_INPUT_CHANNELS == SweepSplitVoxelFeatureEncoder.out_channels
+
+
 @pytest.mark.parametrize("conv_depth", sorted(CONV_DEPTH_PRESETS))
 def test_estimate_matches_the_conv_stem(conv_depth: str) -> None:
     preset = WIDTH_PRESETS["small"]
     depths = encoder_depths(conv_depth, "2-2")
     encoder = LitePTEncoder(
+        in_channels=presets.ENCODER_INPUT_CHANNELS,
         enc_channels=preset.enc_channels,
         enc_num_head=preset.enc_num_head,
         enc_depths=depths,
