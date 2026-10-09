@@ -70,6 +70,7 @@ ATTR_IMPORT = "imported_from"
 ATTR_TRAINED_HERE = "trained_here"
 
 # Study-level attributes written by the termination check.
+STUDY_ATTR_REFERENCE_LATENCY = "reference_latency"
 STUDY_ATTR_TERMINATION = "termination"
 STUDY_ATTR_TERMINATED = "terminated"
 
@@ -373,8 +374,31 @@ def find_reference_trial(study: optuna.Study, name: str) -> FrozenTrial | None:
     return None
 
 
+def reference_model_latencies(study: optuna.Study) -> dict[str, dict[str, Any]]:
+    """Return the bench measurements of the reference models, by name.
+
+    A reference model is a configuration outside the search space (another
+    architecture, such as the deployed PTv3) that anchors the latency bound;
+    its measurement lives on the study rather than on a trial.
+    """
+    stored = study.user_attrs.get(STUDY_ATTR_REFERENCE_LATENCY) or {}
+    return {str(name): dict(value) for name, value in stored.items()}
+
+
+def set_reference_model_latency(
+    study: optuna.Study, name: str, measurement: Mapping[str, Any]
+) -> None:
+    """Record a reference model's bench measurement on the study."""
+    stored = reference_model_latencies(study)
+    stored[name] = dict(measurement)
+    study.set_user_attr(STUDY_ATTR_REFERENCE_LATENCY, stored)
+
+
 def reference_latency_ms(study: optuna.Study, constraints: Sequence[Constraint]) -> float | None:
-    """Return the bench latency of the reference trial the latency bound needs.
+    """Return the bench latency of the reference the latency bound needs.
+
+    The reference is a trial of the study when a trial carries its name,
+    and a reference model recorded on the study otherwise.
 
     Returns:
         The latency, or ``None`` when no constraint is relative or the
@@ -384,9 +408,12 @@ def reference_latency_ms(study: optuna.Study, constraints: Sequence[Constraint])
         if constraint.reference is None:
             continue
         trial = find_reference_trial(study, constraint.reference)
-        if trial is None:
+        if trial is not None:
+            return trial_bench_latency_ms(trial)
+        stored = reference_model_latencies(study).get(constraint.reference)
+        if stored is None:
             return None
-        return trial_bench_latency_ms(trial)
+        return float(stored["latency_ms"])
     return None
 
 

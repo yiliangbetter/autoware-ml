@@ -65,6 +65,10 @@ class BenchError(RuntimeError):
 ENGINE_BUILD_FAILURE = "engine_build"
 
 
+class BenchBusyError(BenchError):
+    """The bench stayed busy with someone else's work for longer than allowed."""
+
+
 class BenchJobError(BenchError):
     """The bench-side job reported a failure.
 
@@ -373,6 +377,11 @@ class BenchSettings:
         unbuildable_violation_ms: Latency violation recorded for an
             architecture whose engines do not build on the target, so the
             sampler treats it as far outside the bound.
+        idle_check: Shell command run on the bench before every job; a
+            non-zero exit means the bench is busy and the job waits.
+        idle_poll_s: Seconds between busy checks.
+        idle_max_wait_s: Longest wait for an idle bench before the
+            measurement is given up for this round.
     """
 
     host: str
@@ -399,6 +408,9 @@ class BenchSettings:
     keep_packages: bool
     max_ci95_ms: float | None = None
     unbuildable_violation_ms: float = 100.0
+    idle_check: str | None = None
+    idle_poll_s: int = 60
+    idle_max_wait_s: int = 6 * 3600
 
     @classmethod
     def from_config(cls, cfg: DictConfig | Mapping[str, Any] | None) -> BenchSettings | None:
@@ -412,6 +424,7 @@ class BenchSettings:
         exchange = plain.get("exchange") or {}
         harness = plain.get("harness") or {}
         job = plain.get("job") or {}
+        idle = plain.get("idle") or {}
         statistic = str(plain.get("statistic", "replicate_median_mean"))
         if statistic not in STATISTICS:
             raise ValueError(f"bench.statistic must be one of {STATISTICS}, got {statistic!r}.")
@@ -442,6 +455,9 @@ class BenchSettings:
             keep_packages=bool(job.get("keep_packages", True)),
             max_ci95_ms=None if plain.get("max_ci95_ms") is None else float(plain["max_ci95_ms"]),
             unbuildable_violation_ms=float(plain.get("unbuildable_violation_ms", 100.0)),
+            idle_check=None if idle.get("command") is None else str(idle["command"]),
+            idle_poll_s=int(idle.get("poll_s", 60)),
+            idle_max_wait_s=int(idle.get("max_wait_s", 6 * 3600)),
         )
 
     @property
@@ -708,6 +724,54 @@ class SshBenchRunner:
             argv.append("--keep-variant")
         return shlex.join(argv)
 
+    def wait_until_idle(self, log_path: Path) -> None:
+        """Block until the bench's idle check passes.
+
+        The bench is shared and another user's job running alongside a
+        measurement would contaminate it both ways, so a job starts only
+        once nothing else is using the GPU there.
+
+        Raises:
+            BenchBusyError: If the bench stays busy beyond ``idle_max_wait_s``.
+        """
+        settings = self.settings
+        if settings.idle_check is None:
+            return
+        started = time.monotonic()
+        announced = False
+        while True:
+            try:
+                completed = subprocess.run(  # noqa: S603 - command assembled from the config
+                    [*settings.ssh_command(), settings.idle_check],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                    timeout=120,
+                    check=False,
+                )
+                code = completed.returncode
+                output = completed.stdout.strip()
+            except subprocess.TimeoutExpired:
+                code, output = -1, "idle check timed out"
+            if code == 0:
+                if announced:
+                    logger.info("Bench %s is idle again", settings.host)
+                return
+            waited = time.monotonic() - started
+            if waited >= settings.idle_max_wait_s:
+                raise BenchBusyError(
+                    f"bench {settings.host} busy for {waited / 3600:.1f} h: {output[:200]}"
+                )
+            if not announced:
+                logger.info("Bench %s is busy (%s); waiting", settings.host, output[:200])
+                with log_path.open("a") as log:
+                    log.write(
+                        f"# {dt.datetime.now().isoformat(timespec='seconds')} bench busy: "
+                        f"{output[:200]}\n"
+                    )
+                announced = True
+            time.sleep(settings.idle_poll_s)
+
     def measure(self, name: str, package_dir: Path, description: str) -> BenchMeasurement:
         """Time the package on the bench, retrying lost SSH connections."""
         settings = self.settings
@@ -716,6 +780,7 @@ class SshBenchRunner:
         command = self.build_remote_command(name, package_dir, series)
         self.log_dir.mkdir(parents=True, exist_ok=True)
         log_path = self.log_dir / f"bench_{name}.log"
+        self.wait_until_idle(log_path)
         attempts = 0
         while True:
             attempts += 1

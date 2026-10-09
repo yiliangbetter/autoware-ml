@@ -44,7 +44,13 @@ from omegaconf import DictConfig, OmegaConf
 from optuna.trial import FrozenTrial, TrialState
 
 from autoware_ml.dataclasses.batch.sample_batch import ModelGTBatch
-from autoware_ml.tuning.bench import BenchError, BenchJobError, BenchRunner, BenchSettings
+from autoware_ml.tuning.bench import (
+    BenchBusyError,
+    BenchError,
+    BenchJobError,
+    BenchRunner,
+    BenchSettings,
+)
 from autoware_ml.tuning.export import load_manifest
 from autoware_ml.tuning.latency import LatencyReport, benchmark_latency
 from autoware_ml.tuning.search_space import LitePTSearchSpace, TrialProposal
@@ -83,6 +89,8 @@ from autoware_ml.tuning.study import (
     latency_constraints,
     objective_values,
     reference_latency_ms,
+    reference_model_latencies,
+    set_reference_model_latency,
     trial_bench_latency_ms,
     trial_is_feasible,
     trials_in_phase,
@@ -104,6 +112,12 @@ CUDA_VISIBLE_DEVICES_ENV = "CUDA_VISIBLE_DEVICES"
 # Measurement and export run one trial on one device; the study's own
 # parallelism is across trials, never inside one.
 MEASURE_OVERRIDES = ("trainer.devices=1",)
+# Where the task configs live, for reference models named by config.
+TASK_CONFIG_PREFIX = "tasks"
+# Per-trial attributes of the out-of-memory retry.
+ATTR_RETRY_OVERRIDES = "retry_overrides"
+ATTR_OOM_RETRIES = "oom_retries"
+OOM_MARKERS = ("CUDA out of memory", "OutOfMemoryError", "CUDA error: out of memory")
 BENCHMARK_OVERRIDES = (
     "datamodule.val_dataloader_cfg.batch_size=1",
     "datamodule.val_dataloader_cfg.persistent_workers=false",
@@ -336,7 +350,11 @@ def prepare_launch(
             "optuna_reference": reference or "",
         },
     )
-    overrides = context.trial_overrides(trial.user_attrs[ATTR_OVERRIDES], *extra_train_overrides)
+    overrides = context.trial_overrides(
+        trial.user_attrs[ATTR_OVERRIDES],
+        *(str(item) for item in trial.user_attrs.get(ATTR_RETRY_OVERRIDES) or ()),
+        *extra_train_overrides,
+    )
     env = dict(os.environ)
     env[AUTOWARE_ML_RUN_ID_ENV] = run_context.run_id
     env[AUTOWARE_ML_HYDRA_RUN_DIR_ENV] = str(run_context.hydra_dir)
@@ -389,12 +407,50 @@ def static_rejection(context: TuningContext, proposal: TrialProposal) -> str | N
     return None
 
 
+def oom_retry_overrides(context: TuningContext, launch: TrainLaunch) -> list[str] | None:
+    """Return the overrides for one more attempt after a CUDA out-of-memory, if allowed.
+
+    ``tuning.oom_retry.overrides`` names the smaller-batch recipe (the same
+    clouds per optimizer step through accumulation keep the schedule) and
+    ``max_retries`` how often a trial may take it. The retry only applies in
+    bench mode, where the trainer re-reads the screened queue.
+    """
+    retry_cfg = context.tuning.get("oom_retry") or {}
+    overrides = [str(item) for item in retry_cfg.get("overrides") or ()]
+    retries = int(launch.trial.user_attrs.get(ATTR_OOM_RETRIES, 0))
+    if not overrides or not context.bench_mode or retries >= int(retry_cfg.get("max_retries", 1)):
+        return None
+    try:
+        tail = launch.log_path.read_text(errors="replace")[-200_000:]
+    except OSError:
+        return None
+    if not any(marker in tail for marker in OOM_MARKERS):
+        return None
+    return overrides
+
+
 def finish_trial_launch(
     context: TuningContext, launch: TrainLaunch, exit_code: int
 ) -> TrialOutcome:
     """Record a finished training subprocess on its trial."""
     trial = launch.trial
     if exit_code != 0:
+        retry = oom_retry_overrides(context, launch)
+        if retry is not None:
+            detail = (
+                f"training ran out of GPU memory (see {launch.log_path}); "
+                f"queued again with {' '.join(retry)}"
+            )
+            _set_attrs(
+                trial,
+                {
+                    ATTR_RETRY_OVERRIDES: retry,
+                    ATTR_OOM_RETRIES: int(trial.user_attrs.get(ATTR_OOM_RETRIES, 0)) + 1,
+                    ATTR_PHASE: PHASE_SCREENED,
+                    ATTR_ERROR: detail,
+                },
+            )
+            return TrialOutcome(trial.number, STATUS_SKIPPED, detail)
         detail = f"training exited with code {exit_code}, see {launch.log_path}"
         trial.set_user_attr(ATTR_ERROR, detail)
         context.study.tell(trial, state=TrialState.FAIL)
@@ -729,6 +785,18 @@ def run_measure_phase(
     if max_trials is not None:
         trials = trials[:max_trials]
     outcomes: list[TrialOutcome] = []
+    relative = [c for c in latency_constraints(context.constraints) if c.reference is not None]
+    if trials and relative and reference_latency_ms(context.study, context.constraints) is None:
+        # Telling a trial needs the bound; until the reference is measured the
+        # trained trials simply wait, which costs no measurement attempt.
+        return [
+            TrialOutcome(
+                -1,
+                STATUS_SKIPPED,
+                f"{len(trials)} trained trial(s) wait: the latency of reference "
+                f"{relative[0].reference!r} is still unknown",
+            )
+        ]
     for frozen in trials:
         attempts = int(frozen.user_attrs.get(ATTR_MEASURE_ATTEMPTS, 0))
         live = _running_trial(context.study, frozen)
@@ -831,6 +899,13 @@ def screen_trial(
         package_dir = exporter(context, trial)
         description = f"{study.study_name} trial {trial.number}: {_describe_params(trial)}"
         measurement = runner.measure(name, package_dir, description)
+    except BenchBusyError as exc:
+        # Someone else's job on the bench is not this trial's failure.
+        live.set_user_attr(ATTR_BENCH_ATTEMPTS, attempts)
+        detail = f"{exc}; measuring again later"
+        live.set_user_attr(ATTR_ERROR, detail)
+        logger.warning("Trial %d: %s", trial.number, detail)
+        return ScreenOutcome(trial.number, STATUS_SKIPPED, detail)
     except BenchJobError as exc:
         if exc.unbuildable:
             return reject_unbuildable(context, trial, exc)
@@ -854,8 +929,11 @@ def screen_trial(
         return ScreenOutcome(trial.number, STATUS_SKIPPED, detail, measurement.latency_ms)
     live.set_user_attr(ATTR_BENCH, measurement.to_dict())
     latency = measurement.latency_ms
-    is_reference = trial.user_attrs.get(ATTR_REFERENCE) == context.bench.reference
-    reference = latency if is_reference else reference_latency_ms(study, context.constraints)
+    # A trial that anchors the latency bound passes by definition; every
+    # other trial is judged against the anchor, be it a trial or a model.
+    anchors = {c.reference for c in latency_constraints(context.constraints) if c.reference}
+    is_anchor = trial.user_attrs.get(ATTR_REFERENCE) in anchors
+    reference = latency if is_anchor else reference_latency_ms(study, context.constraints)
     limit = None
     for constraint in latency_constraints(context.constraints):
         limit = constraint.upper_bound(reference)
@@ -950,6 +1028,108 @@ def reject_unbuildable(
     return ScreenOutcome(trial.number, STATUS_REJECTED, reason)
 
 
+def reference_model_specs(context: TuningContext) -> dict[str, dict[str, Any]]:
+    """Return the configured ``tuning.reference_models``: name to config and overrides.
+
+    A reference model is an architecture outside the search space, such as
+    the deployed PTv3, whose bench latency anchors the latency bound. It is
+    never trained by the study; it is exported with its initial weights and
+    timed like a trial, and its measurement lives on the study.
+    """
+    specs = context.tuning.get("reference_models") or {}
+    plain = OmegaConf.to_container(specs, resolve=True) if OmegaConf.is_config(specs) else specs
+    assert isinstance(plain, Mapping)
+    return {str(name): dict(spec) for name, spec in plain.items()}
+
+
+def reference_model_variant(context: TuningContext, name: str) -> str:
+    """Return the harness variant name of a reference model."""
+    assert context.bench is not None
+    return f"{context.bench.variant.prefix}-ref-{name.replace('_', '-')}"
+
+
+def export_reference_model_package(
+    context: TuningContext, name: str, spec: Mapping[str, Any]
+) -> Path:
+    """Export a reference model's package unless a complete one already exists."""
+    from autoware_ml.tuning.export import export_package
+
+    assert context.bench is not None
+    package_dir = context.bench.packages_dir / reference_model_variant(context, name)
+    if load_manifest(package_dir) is not None:
+        return package_dir
+    config_name = str(spec["config_name"])
+    reference = ConfigReference.resolve(config_name, TASK_CONFIG_PREFIX)
+    overrides = [*(str(item) for item in spec.get("overrides") or ()), *MEASURE_OVERRIDES]
+    cfg = reference.compose(overrides)
+    logger.info("Reference model %s: exporting package to %s", name, package_dir)
+    export_package(
+        cfg,
+        package_dir,
+        config_name=config_name,
+        params={"reference_model": name},
+        overrides=overrides,
+    )
+    return package_dir
+
+
+def measure_reference_models(context: TuningContext, runner: BenchRunner) -> list[TrialOutcome]:
+    """Time every configured reference model that has no bench latency yet."""
+    assert context.bench is not None
+    outcomes: list[TrialOutcome] = []
+    known = reference_model_latencies(context.study)
+    for name, spec in reference_model_specs(context).items():
+        if name in known:
+            continue
+        variant = reference_model_variant(context, name)
+        try:
+            package_dir = export_reference_model_package(context, name, spec)
+            description = (
+                f"{context.study.study_name} reference model {name}: {spec['config_name']}"
+            )
+            measurement = runner.measure(variant, package_dir, description)
+        except BenchBusyError as exc:
+            detail = f"reference model {name}: {exc}; measuring again later"
+            logger.warning(detail)
+            outcomes.append(TrialOutcome(-1, STATUS_SKIPPED, detail))
+            continue
+        except Exception as exc:  # noqa: BLE001 - reported as an outcome
+            logger.exception("Reference model %s: bench measurement failed", name)
+            outcomes.append(
+                TrialOutcome(
+                    -1, STATUS_FAILED, f"reference model {name}: {type(exc).__name__}: {exc}"
+                )
+            )
+            continue
+        limit_ci = context.bench.max_ci95_ms
+        if limit_ci is not None and measurement.ci95_ms > limit_ci:
+            detail = (
+                f"reference model {name}: replicate spread +-{measurement.ci95_ms:.2f} ms exceeds "
+                f"{limit_ci:.2f} ms; the bench was probably contended, measuring again later"
+            )
+            logger.warning(detail)
+            outcomes.append(TrialOutcome(-1, STATUS_SKIPPED, detail))
+            continue
+        record = measurement.to_dict()
+        record.update(
+            {
+                "config_name": str(spec["config_name"]),
+                "overrides": [str(item) for item in spec.get("overrides") or ()],
+                "package_dir": str(package_dir),
+            }
+        )
+        set_reference_model_latency(context.study, name, record)
+        outcomes.append(
+            TrialOutcome(
+                -1,
+                STATUS_MEASURED,
+                f"reference model {name}: {measurement.latency_ms:.2f} ms "
+                f"(+-{measurement.ci95_ms:.2f} ms over {measurement.replicates} replicates)",
+            )
+        )
+    return outcomes
+
+
 def pending_screen_trials(context: TuningContext) -> list[FrozenTrial]:
     """Running trials that have no bench latency yet: the reference first, then by number."""
     assert context.bench is not None
@@ -1029,6 +1209,8 @@ def run_screen_phase(
     limit_measurements = n_trials if n_trials is not None else 10**9
     drain_waiting_trials(context)
     outcomes.extend(tell_known_trials(context))
+    # The reference models anchor the bound, so they go before any trial.
+    outcomes.extend(measure_reference_models(context, runner))
 
     def window_open() -> bool:
         if ignore_window or window is None:
@@ -1161,6 +1343,11 @@ def format_status(context: TuningContext) -> str:
             )
         elif constraint.max is not None:
             lines.append(f"latency bound: {constraint.max:.2f} ms")
+    for name, record in reference_model_latencies(study).items():
+        lines.append(
+            f"reference model {name}: {float(record['latency_ms']):.2f} ms "
+            f"({record.get('config_name', '')})"
+        )
     cap = context.max_trained_trials
     lines.append(
         f"trainings paid for: {count_trained_here(study)}"

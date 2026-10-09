@@ -17,7 +17,7 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 import hydra
@@ -102,6 +102,19 @@ def load_context(config_name: str, extra_args: Sequence[str] = ()) -> TuningCont
             raise ValueError(
                 f"bench.reference {bench.reference!r} is not one of the configured "
                 f"reference_trials {sorted(references)}."
+            )
+    models = tuning.get("reference_models") or {}
+    for name, spec in models.items():
+        if not isinstance(spec, Mapping | DictConfig) or "config_name" not in spec:
+            raise ValueError(f"reference_models.{name} needs a config_name.")
+    for constraint in constraints:
+        if constraint.reference is not None and constraint.reference not in {
+            *(tuning.get("reference_trials") or {}),
+            *models,
+        }:
+            raise ValueError(
+                f"Constraint on {constraint.metric!r} refers to {constraint.reference!r}, "
+                "which is neither a reference trial nor a reference model."
             )
     sampler = build_sampler(tuning.get("sampler"), len(constraints))
     study = open_study(str(tuning.study_name), str(tuning.storage), objectives, sampler)
