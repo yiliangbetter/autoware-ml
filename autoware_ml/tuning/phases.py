@@ -125,9 +125,10 @@ OOM_MARKERS = ("CUDA out of memory", "OutOfMemoryError", "CUDA error: out of mem
 # while the screen phase holds the pause. Both are files in the study directory.
 PAUSE_FILE_NAME = "PAUSE_TRAIN"
 ACTIVE_FILE_NAME = "training.active"
+# Force-added so they apply whether or not the datamodule config declares them.
 BENCHMARK_OVERRIDES = (
-    "datamodule.val_dataloader_cfg.batch_size=1",
-    "datamodule.val_dataloader_cfg.persistent_workers=false",
+    "++datamodule.val_dataloader.batch_size=1",
+    "++datamodule.val_dataloader.persistent_workers=false",
 )
 STATIC_ENCODER_PARAMS = "encoder_params"
 
@@ -732,9 +733,15 @@ def evaluate_trial(
     if not latency_settings.get("proxy", True):
         return TrialEvaluation(metrics=metrics)
 
-    benchmark_cfg = context.config.compose([*overrides, *BENCHMARK_OVERRIDES])
-    benchmark_datamodule = hydra.utils.instantiate(benchmark_cfg.datamodule)
-    benchmark_datamodule.setup("validate")
+    try:
+        benchmark_cfg = context.config.compose([*overrides, *BENCHMARK_OVERRIDES])
+        benchmark_datamodule = hydra.utils.instantiate(benchmark_cfg.datamodule)
+        benchmark_datamodule.setup("validate")
+    except Exception:  # noqa: BLE001 - the proxy is informational, the accuracy is not
+        logger.exception(
+            "Trial %d: proxy latency setup failed; recording the accuracy only", trial.number
+        )
+        return TrialEvaluation(metrics=metrics)
     model.to(device).eval()
 
     def forward(batch: ModelGTBatch) -> Any:
