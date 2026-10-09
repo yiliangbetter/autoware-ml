@@ -388,7 +388,25 @@ def export_package(
         contract=contract,
     )
     (output_dir / MANIFEST_NAME).write_text(json.dumps(manifest.to_dict(), indent=2) + "\n")
+    # The screen phase shares the GPU with a trainer: hand the cached memory back
+    # as soon as the export is done instead of holding it through the bench jobs.
+    del export_specs, model, datamodule
+    release_gpu_memory()
     return manifest
+
+
+def release_gpu_memory() -> None:
+    """Return every cached CUDA block of this process to the driver."""
+    import gc
+
+    gc.collect()
+    try:
+        import torch
+
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+    except ImportError:  # pragma: no cover - torch is a hard dependency elsewhere
+        pass
 
 
 def load_manifest(package_dir: Path, contract: str | None = None) -> PackageManifest | None:
