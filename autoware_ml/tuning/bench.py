@@ -382,6 +382,11 @@ class BenchSettings:
         idle_poll_s: Seconds between busy checks.
         idle_max_wait_s: Longest wait for an idle bench before the
             measurement is given up for this round.
+        export_contract: Encoder export contract of every package, see
+            ``autoware_ml.tuning.export.CONTRACTS``; ``legacy_feat4`` times
+            the architectures on a node that predates multi-sweep support.
+        export_max_wait_s: Longest wait for the trainer to release the GPU
+            before the exports of a screening round are skipped.
     """
 
     host: str
@@ -411,6 +416,8 @@ class BenchSettings:
     idle_check: str | None = None
     idle_poll_s: int = 60
     idle_max_wait_s: int = 6 * 3600
+    export_contract: str = "main"
+    export_max_wait_s: int = 4 * 3600
 
     @classmethod
     def from_config(cls, cfg: DictConfig | Mapping[str, Any] | None) -> BenchSettings | None:
@@ -458,6 +465,8 @@ class BenchSettings:
             idle_check=None if idle.get("command") is None else str(idle["command"]),
             idle_poll_s=int(idle.get("poll_s", 60)),
             idle_max_wait_s=int(idle.get("max_wait_s", 6 * 3600)),
+            export_contract=str(plain.get("export_contract", "main")),
+            export_max_wait_s=int(plain.get("export_max_wait_s", 4 * 3600)),
         )
 
     @property

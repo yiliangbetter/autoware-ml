@@ -27,9 +27,11 @@ with the eager proxy, as the first study did.
 
 from __future__ import annotations
 
+import contextlib
 import datetime as dt
 import logging
 import os
+import shutil
 import subprocess
 import sys
 import time
@@ -51,7 +53,7 @@ from autoware_ml.tuning.bench import (
     BenchRunner,
     BenchSettings,
 )
-from autoware_ml.tuning.export import load_manifest
+from autoware_ml.tuning.export import MAIN_CONTRACT, load_manifest
 from autoware_ml.tuning.latency import LatencyReport, benchmark_latency
 from autoware_ml.tuning.search_space import LitePTSearchSpace, TrialProposal
 from autoware_ml.tuning.study import (
@@ -118,6 +120,11 @@ TASK_CONFIG_PREFIX = "tasks"
 ATTR_RETRY_OVERRIDES = "retry_overrides"
 ATTR_OOM_RETRIES = "oom_retries"
 OOM_MARKERS = ("CUDA out of memory", "OutOfMemoryError", "CUDA error: out of memory")
+# The trainer and the screen phase share one GPU: the screen phase exports a
+# package only while no training runs, and the trainer does not launch one
+# while the screen phase holds the pause. Both are files in the study directory.
+PAUSE_FILE_NAME = "PAUSE_TRAIN"
+ACTIVE_FILE_NAME = "training.active"
 BENCHMARK_OVERRIDES = (
     "datamodule.val_dataloader_cfg.batch_size=1",
     "datamodule.val_dataloader_cfg.persistent_workers=false",
@@ -136,6 +143,87 @@ STATUS_QUEUE_FULL = "queue_full"
 STATUS_TERMINATED = "terminated"
 STATUS_BUDGET = "budget_reached"
 STATUS_IDLE = "idle"
+
+
+class TrainerBusyError(RuntimeError):
+    """The trainer kept the GPU for longer than the screen phase could wait."""
+
+
+def study_dir(context: "TuningContext") -> Path:
+    """Directory holding the study's coordination files, next to its logs."""
+    return context.log_dir.parent
+
+
+def mark_training_active(context: "TuningContext") -> None:
+    """Record that this process runs a training on the GPU."""
+    path = study_dir(context) / ACTIVE_FILE_NAME
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(str(os.getpid()))
+
+
+def clear_training_active(context: "TuningContext") -> None:
+    """Forget the training this process ran."""
+    (study_dir(context) / ACTIVE_FILE_NAME).unlink(missing_ok=True)
+
+
+def training_active(context: "TuningContext") -> bool:
+    """Whether a live trainer process holds the GPU, judged by its recorded pid."""
+    path = study_dir(context) / ACTIVE_FILE_NAME
+    try:
+        pid = int(path.read_text().strip())
+    except (OSError, ValueError):
+        return False
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def wait_while_paused(
+    context: "TuningContext", *, poll_s: float = 10.0, max_wait_s: float = 2 * 3600
+) -> None:
+    """Hold a training launch while the screen phase is exporting packages."""
+    path = study_dir(context) / PAUSE_FILE_NAME
+    started = time.monotonic()
+    announced = False
+    while path.exists() and time.monotonic() - started < max_wait_s:
+        if not announced:
+            logger.info("Training paused: %s exists (the screen phase is exporting)", path)
+            announced = True
+        time.sleep(poll_s)
+    if announced:
+        logger.info("Training resumes")
+
+
+@contextlib.contextmanager
+def trainer_paused(context: "TuningContext", max_wait_s: float, *, poll_s: float = 15.0):
+    """Keep the trainer off the GPU while the body runs, once the current training ends.
+
+    Raises:
+        TrainerBusyError: If a training is still running after ``max_wait_s``.
+    """
+    pause = study_dir(context) / PAUSE_FILE_NAME
+    pause.parent.mkdir(parents=True, exist_ok=True)
+    pause.write_text(dt.datetime.now().isoformat(timespec="seconds"))
+    try:
+        time.sleep(2.0)  # a trainer that passed the pause check gets to record its launch
+        started = time.monotonic()
+        announced = False
+        while training_active(context):
+            if time.monotonic() - started >= max_wait_s:
+                raise TrainerBusyError(
+                    f"a training held the GPU for more than {max_wait_s / 3600:.1f} h"
+                )
+            if not announced:
+                logger.info("Waiting for the running training to finish before exporting")
+                announced = True
+            time.sleep(poll_s)
+        yield
+    finally:
+        pause.unlink(missing_ok=True)
 
 
 @dataclass(frozen=True)
@@ -562,7 +650,9 @@ def run_train_phase(
                 gpu if gpu is not None else "visible devices",
                 launch.log_path,
             )
+            wait_while_paused(context)
             running.append((launch, launcher(launch)))
+            mark_training_active(context)
             launched += 1
         if not running:
             break
@@ -579,6 +669,7 @@ def run_train_phase(
         running = still_running
         if running:
             time.sleep(poll_interval)
+    clear_training_active(context)
     if queue is not None and not any(o.status in (STATUS_TRAINED, STATUS_FAILED) for o in outcomes):
         outcomes.append(TrialOutcome(-1, STATUS_IDLE, "no screened trial is waiting"))
     return outcomes
@@ -842,6 +933,16 @@ class ScreenOutcome(TrialOutcome):
     limit_ms: float | None = None
 
 
+def export_contract(context: TuningContext) -> str:
+    """The encoder export contract the bench packages follow."""
+    return context.bench.export_contract if context.bench is not None else MAIN_CONTRACT
+
+
+def trial_has_package(context: TuningContext, trial: FrozenTrial) -> bool:
+    """Whether the trial's package exists under the current contract."""
+    return load_manifest(context.package_dir(trial.number), export_contract(context)) is not None
+
+
 def export_trial_package(context: TuningContext, trial: FrozenTrial) -> Path:
     """Export the trial's package unless a complete one already exists."""
     from autoware_ml.tuning.export import export_package
@@ -850,17 +951,21 @@ def export_trial_package(context: TuningContext, trial: FrozenTrial) -> Path:
         drain_waiting_trials(context)
         trial = context.study._storage.get_trial(trial._trial_id)
     package_dir = context.package_dir(trial.number)
-    manifest = load_manifest(package_dir)
+    contract = export_contract(context)
+    manifest = load_manifest(package_dir, contract)
     if manifest is None:
+        if package_dir.exists():
+            shutil.rmtree(package_dir)  # incomplete, or exported under another contract
         overrides = context.trial_overrides(trial.user_attrs[ATTR_OVERRIDES], *MEASURE_OVERRIDES)
         cfg = context.config.compose(overrides)
-        logger.info("Trial %d: exporting package to %s", trial.number, package_dir)
+        logger.info("Trial %d: exporting package to %s (%s)", trial.number, package_dir, contract)
         export_package(
             cfg,
             package_dir,
             config_name=context.config_name,
             params=dict(trial.params),
             overrides=overrides,
+            contract=contract,
         )
     _running_trial(context.study, trial).set_user_attr(ATTR_PACKAGE, str(package_dir))
     return package_dir
@@ -1056,25 +1161,47 @@ def export_reference_model_package(
 
     assert context.bench is not None
     package_dir = context.bench.packages_dir / reference_model_variant(context, name)
-    if load_manifest(package_dir) is not None:
+    contract = export_contract(context)
+    if load_manifest(package_dir, contract) is not None:
         return package_dir
+    if package_dir.exists():
+        shutil.rmtree(package_dir)
     config_name = str(spec["config_name"])
     reference = ConfigReference.resolve(config_name, TASK_CONFIG_PREFIX)
     overrides = [*(str(item) for item in spec.get("overrides") or ()), *MEASURE_OVERRIDES]
     cfg = reference.compose(overrides)
-    logger.info("Reference model %s: exporting package to %s", name, package_dir)
+    logger.info("Reference model %s: exporting package to %s (%s)", name, package_dir, contract)
     export_package(
         cfg,
         package_dir,
         config_name=config_name,
         params={"reference_model": name},
         overrides=overrides,
+        contract=contract,
     )
     return package_dir
 
 
+def export_reference_models(context: TuningContext) -> list[TrialOutcome]:
+    """Export the package of every reference model that has no bench latency yet."""
+    assert context.bench is not None
+    outcomes: list[TrialOutcome] = []
+    known = reference_model_latencies(context.study)
+    for name, spec in reference_model_specs(context).items():
+        if name in known:
+            continue
+        try:
+            export_reference_model_package(context, name, spec)
+        except Exception as exc:  # noqa: BLE001 - reported as an outcome
+            logger.exception("Reference model %s: export failed", name)
+            outcomes.append(
+                TrialOutcome(-1, STATUS_FAILED, f"reference model {name}: export failed: {exc}")
+            )
+    return outcomes
+
+
 def measure_reference_models(context: TuningContext, runner: BenchRunner) -> list[TrialOutcome]:
-    """Time every configured reference model that has no bench latency yet."""
+    """Time every configured reference model whose package exists and that has no latency yet."""
     assert context.bench is not None
     outcomes: list[TrialOutcome] = []
     known = reference_model_latencies(context.study)
@@ -1082,8 +1209,13 @@ def measure_reference_models(context: TuningContext, runner: BenchRunner) -> lis
         if name in known:
             continue
         variant = reference_model_variant(context, name)
+        package_dir = context.bench.packages_dir / variant
+        if load_manifest(package_dir, export_contract(context)) is None:
+            outcomes.append(
+                TrialOutcome(-1, STATUS_SKIPPED, f"reference model {name}: no package yet")
+            )
+            continue
         try:
-            package_dir = export_reference_model_package(context, name, spec)
             description = (
                 f"{context.study.study_name} reference model {name}: {spec['config_name']}"
             )
@@ -1116,6 +1248,7 @@ def measure_reference_models(context: TuningContext, runner: BenchRunner) -> lis
                 "config_name": str(spec["config_name"]),
                 "overrides": [str(item) for item in spec.get("overrides") or ()],
                 "package_dir": str(package_dir),
+                "contract": export_contract(context),
             }
         )
         set_reference_model_latency(context.study, name, record)
@@ -1151,6 +1284,11 @@ def screened_queue_length(context: TuningContext) -> int:
     return len(trials_in_phase(context.study, PHASE_SCREENED))
 
 
+def in_flight_count(context: TuningContext) -> int:
+    """Trials waiting for training plus trials asked but not yet timed."""
+    return screened_queue_length(context) + len(pending_screen_trials(context))
+
+
 def run_screen_phase(
     context: TuningContext,
     runner: BenchRunner,
@@ -1165,9 +1303,13 @@ def run_screen_phase(
 ) -> list[TrialOutcome]:
     """Screen trials on the bench until the queue target or the window is reached.
 
-    The reference trial goes first because the latency bound derives from
-    it; then every trial that already exists without a bench latency; then
-    new proposals while the training queue is below its target.
+    Each round has two halves. First, with the trainer paused (it shares the
+    GPU), the phase exports what needs exporting: the reference models,
+    trials asked earlier that still lack a package, and new proposals until
+    the queue target is reached. Then, GPU free again, it times the reference
+    models and every pending trial on the bench; the reference trial goes
+    first because the latency bound may derive from it. Rounds repeat while
+    rejections leave the queue short of its target.
 
     Args:
         context: The study context, with a bench configured.
@@ -1209,49 +1351,92 @@ def run_screen_phase(
     limit_measurements = n_trials if n_trials is not None else 10**9
     drain_waiting_trials(context)
     outcomes.extend(tell_known_trials(context))
-    # The reference models anchor the bound, so they go before any trial.
-    outcomes.extend(measure_reference_models(context, runner))
+    target = queue_target if queue_target is not None else settings.queue.target_at(window, current)
+    terminated = study_terminated(study) is not None and not ignore_termination
+    budget = training_budget_left(context)
+    if budget is not None:
+        target = min(target, budget)
+    asks = 0
+    ask_budget = max_asks if max_asks is not None else 10 * max(1, target)
+    relative = [c for c in latency_constraints(context.constraints) if c.reference is not None]
+    anchors = {c.reference for c in relative}
 
     def window_open() -> bool:
         if ignore_window or window is None:
             return True
         return window.contains(window.now() if now is None else current)
 
-    for trial in pending_screen_trials(context):
-        if measured >= limit_measurements or not window_open():
+    def reference_known() -> bool:
+        return not relative or reference_latency_ms(study, context.constraints) is not None
+
+    failed_exports: set[int] = set()
+
+    def export_quietly(trial: FrozenTrial) -> bool:
+        try:
+            exporter(context, trial)
+        except Exception as exc:  # noqa: BLE001 - the trial stays pending for the next round
+            logger.exception("Trial %d: export failed", trial.number)
+            outcomes.append(TrialOutcome(trial.number, STATUS_SKIPPED, f"export failed: {exc}"))
+            failed_exports.add(trial.number)
+            return False
+        return True
+
+    while True:
+        progressed = False
+        needs_export = (
+            any(
+                name not in reference_model_latencies(study)
+                for name in reference_model_specs(context)
+            )
+            or any(not trial_has_package(context, t) for t in pending_screen_trials(context))
+            or (not terminated and in_flight_count(context) < target and asks < ask_budget)
+        )
+        if needs_export:
+            try:
+                with trainer_paused(context, settings.export_max_wait_s):
+                    outcomes.extend(export_reference_models(context))
+                    for trial in pending_screen_trials(context):
+                        if not trial_has_package(context, trial):
+                            progressed |= export_quietly(trial)
+                    while (
+                        not terminated and in_flight_count(context) < target and asks < ask_budget
+                    ):
+                        asks += 1
+                        asked = ask_trial(context)
+                        if asked is None:
+                            outcomes.append(TrialOutcome(-1, STATUS_PRUNED, "static filter"))
+                            continue
+                        trial, _ = asked
+                        progressed |= export_quietly(study._storage.get_trial(trial._trial_id))
+            except TrainerBusyError as exc:
+                outcomes.append(TrialOutcome(-1, STATUS_SKIPPED, f"exports postponed: {exc}"))
+        outcomes.extend(measure_reference_models(context, runner))
+        for trial in pending_screen_trials(context):
+            if measured >= limit_measurements or not window_open():
+                break
+            if trial.number in failed_exports:
+                continue
+            if not reference_known() and trial.user_attrs.get(ATTR_REFERENCE) not in anchors:
+                continue
+            outcomes.append(screen_trial(context, trial, runner, exporter=exporter))
+            measured += 1
+            progressed = True
+        if not reference_known():
+            outcomes.append(
+                TrialOutcome(-1, STATUS_SKIPPED, "the reference latency is still unknown")
+            )
+            return outcomes
+        if terminated:
+            outcomes.append(TrialOutcome(-1, STATUS_TERMINATED, "the study was terminated"))
+            return outcomes
+        if (
+            screened_queue_length(context) >= target
+            or measured >= limit_measurements
+            or asks >= ask_budget
+            or not window_open()
+            or not progressed
+        ):
             break
-        outcomes.append(screen_trial(context, trial, runner, exporter=exporter))
-        measured += 1
-    if reference_latency_ms(study, context.constraints) is None and latency_constraints(
-        context.constraints
-    ):
-        outcomes.append(TrialOutcome(-1, STATUS_SKIPPED, "the reference latency is still unknown"))
-        return outcomes
-    target = queue_target if queue_target is not None else settings.queue.target_at(window, current)
-    terminated = study_terminated(study) is not None and not ignore_termination
-    if terminated:
-        outcomes.append(TrialOutcome(-1, STATUS_TERMINATED, "the study was terminated"))
-        return outcomes
-    budget = training_budget_left(context)
-    if budget is not None:
-        target = min(target, budget)
-    asks = 0
-    ask_budget = max_asks if max_asks is not None else 10 * max(1, target)
-    while (
-        screened_queue_length(context) < target
-        and measured < limit_measurements
-        and asks < ask_budget
-        and window_open()
-    ):
-        asks += 1
-        asked = ask_trial(context)
-        if asked is None:
-            outcomes.append(TrialOutcome(-1, STATUS_PRUNED, "static filter"))
-            continue
-        trial, _ = asked
-        frozen = study._storage.get_trial(trial._trial_id)
-        outcomes.append(screen_trial(context, frozen, runner, exporter=exporter))
-        measured += 1
     if screened_queue_length(context) >= target and not any(
         o.status in (STATUS_SCREENED, STATUS_REJECTED) for o in outcomes
     ):

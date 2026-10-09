@@ -39,6 +39,19 @@ MANIFEST_NAME = "manifest.json"
 ML_PACKAGE_PARAM_NAME = "ml_package_ptv3.param.yaml"
 ENCODER_MODULE = "ptv3_encoder"
 SEG_HEAD_MODULE = "ptv3_seg3d_head"
+# Export contracts. ``main`` is this repository's: the voxel feature encoder
+# sits inside the encoder graph, which takes the padded voxel points.
+# ``legacy_feat4`` is the contract of the PTv3 node before multi-sweep
+# support (autoware_universe up to the merge of #13290): the node hands the
+# encoder one feature vector per voxel, x, y, z and intensity. A tiny linear
+# adapter in front of the real stem stands in for the voxel feature encoder,
+# so an architecture can be timed on that node with the rest of its graph
+# unchanged; the adapter costs the same for every architecture.
+MAIN_CONTRACT = "main"
+LEGACY_CONTRACT = "legacy_feat4"
+CONTRACTS = (MAIN_CONTRACT, LEGACY_CONTRACT)
+LEGACY_FEATURE_CHANNELS = 4
+LEGACY_FEATURE_INPUT = "feat"
 # A fixed, distinguishable colour ladder; the node only checks the length.
 _PALETTE = (
     (0, 150, 245),
@@ -79,6 +92,7 @@ class PackageManifest:
         inputs: Declared ONNX inputs per module.
         params: Trial parameters the package realizes.
         overrides: Hydra overrides the package was exported with.
+        contract: Export contract of the encoder graph, see :data:`CONTRACTS`.
     """
 
     directory: Path
@@ -86,6 +100,7 @@ class PackageManifest:
     inputs: dict[str, list[str]]
     params: dict[str, Any]
     overrides: list[str]
+    contract: str = MAIN_CONTRACT
 
     def to_dict(self) -> dict[str, Any]:
         """Return a JSON-serializable view."""
@@ -95,6 +110,7 @@ class PackageManifest:
             "inputs": self.inputs,
             "params": self.params,
             "overrides": self.overrides,
+            "contract": self.contract,
         }
 
 
@@ -166,6 +182,75 @@ def render_ml_package_params(cfg: DictConfig | Mapping[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def legacy_feat4_encoder_spec(spec: Any, device: Any) -> Any:
+    """Rewrite an encoder export spec to the ``legacy_feat4`` contract.
+
+    The graph keeps every input after the voxel points (grid coordinates,
+    level-0 serialization order and the pooling metadata) and takes a
+    ``feat`` tensor of four channels per voxel instead of the padded voxel
+    points and their counts. A linear adapter maps those four channels to
+    the width the real stem expects, keeping x, y and z in front because the
+    export reads the coordinates from the first three feature channels.
+
+    Args:
+        spec: The ``main``-contract encoder spec built by the model.
+        device: Device the adapter's parameters live on.
+
+    Returns:
+        A spec whose module and inputs follow the legacy contract.
+    """
+    import torch
+    from torch import nn
+
+    from autoware_ml.utils.deploy import ExportSpec
+
+    names = list(spec.input_param_names)
+    if names[:3] != ["voxels", "num_points_per_voxel", "grid_coord"]:
+        raise ValueError(f"Unexpected encoder inputs for the legacy contract: {names[:3]}")
+    voxels, _num_points, grid_coord, *rest = spec.args
+    stem_width = int(spec.module.voxel_encoder.out_channels)
+
+    class _LegacyFeatureAdapter(nn.Module):
+        """Stand-in for the voxel feature encoder: four node features to the stem width."""
+
+        def __init__(self) -> None:
+            super().__init__()
+            self.proj = nn.Linear(LEGACY_FEATURE_CHANNELS, stem_width - 3)
+
+        def forward(self, feat: torch.Tensor, num_points: torch.Tensor) -> torch.Tensor:
+            del num_points
+            return torch.cat([feat[:, :3], self.proj(feat)], dim=1)
+
+    class _LegacyEncoderExportModule(nn.Module):
+        """The main-contract encoder graph behind the legacy input signature."""
+
+        def __init__(self, inner: nn.Module) -> None:
+            super().__init__()
+            self.inner = inner
+
+        def forward(
+            self, grid_coord: torch.Tensor, feat: torch.Tensor, *rest: torch.Tensor
+        ) -> tuple[torch.Tensor, ...]:
+            num_points = feat.new_ones(feat.shape[0])
+            return self.inner(feat, num_points, grid_coord, *rest)
+
+    spec.module.voxel_encoder = _LegacyFeatureAdapter().to(device).eval()
+    module = _LegacyEncoderExportModule(spec.module).to(device).eval()
+    feat = voxels[:, 0, :LEGACY_FEATURE_CHANNELS].contiguous().to(torch.float32)
+    axes = dict(spec.dynamic_axes or {})
+    axes.pop("voxels", None)
+    axes.pop("num_points_per_voxel", None)
+    axes[LEGACY_FEATURE_INPUT] = dict(axes.get("grid_coord", {0: "num_voxels"}))
+    return ExportSpec(
+        module=module,
+        args=(grid_coord, feat, *rest),
+        input_param_names=["grid_coord", LEGACY_FEATURE_INPUT, *names[3:]],
+        output_names=spec.output_names,
+        dynamic_axes=axes,
+        supported_stages=spec.supported_stages,
+    )
+
+
 def export_package(
     cfg: DictConfig,
     output_dir: Path,
@@ -173,6 +258,7 @@ def export_package(
     config_name: str,
     params: Mapping[str, Any],
     overrides: Sequence[str],
+    contract: str = MAIN_CONTRACT,
 ) -> PackageManifest:
     """Export the configured model with its initial weights into ``output_dir``.
 
@@ -186,10 +272,13 @@ def export_package(
         config_name: User-facing config name recorded in the metadata.
         params: Trial parameters recorded in the manifest.
         overrides: Overrides recorded in the manifest.
+        contract: Encoder export contract, one of :data:`CONTRACTS`.
 
     Returns:
         The manifest, also written as ``manifest.json``.
     """
+    if contract not in CONTRACTS:
+        raise ValueError(f"Unknown export contract {contract!r}, expected one of {CONTRACTS}.")
     import hydra
     import onnx
     import torch
@@ -217,6 +306,10 @@ def export_package(
     model.set_data_preprocessing(hydra.utils.instantiate(cfg.data_preprocessing))
     model.to(device).eval()
     export_specs = resolve_export_specs(datamodule, model, device)
+    if contract == LEGACY_CONTRACT:
+        export_specs[ENCODER_MODULE] = legacy_feat4_encoder_spec(
+            export_specs[ENCODER_MODULE], device
+        )
     git_sha = get_git_sha()
     files: dict[str, str] = {}
     inputs: dict[str, list[str]] = {}
@@ -267,6 +360,7 @@ def export_package(
         )
         assert isinstance(metainfo, dict)
         metainfo["weights"] = "initialization only: exported for latency screening"
+        metainfo["export_contract"] = contract
         stamp_onnx_meta(
             final_path,
             config_name=config_name,
@@ -291,13 +385,20 @@ def export_package(
         inputs=inputs,
         params=dict(params),
         overrides=list(overrides),
+        contract=contract,
     )
     (output_dir / MANIFEST_NAME).write_text(json.dumps(manifest.to_dict(), indent=2) + "\n")
     return manifest
 
 
-def load_manifest(package_dir: Path) -> PackageManifest | None:
-    """Return the manifest of an exported package, if it is complete."""
+def load_manifest(package_dir: Path, contract: str | None = None) -> PackageManifest | None:
+    """Return the manifest of an exported package, if it is complete.
+
+    Args:
+        package_dir: The package directory.
+        contract: When given, a package exported under another contract
+            does not count as present.
+    """
     path = package_dir / MANIFEST_NAME
     if not path.is_file():
         return None
@@ -305,10 +406,14 @@ def load_manifest(package_dir: Path) -> PackageManifest | None:
     for name in data.get("files", {}):
         if not (package_dir / name).is_file():
             return None
-    return PackageManifest(
+    manifest = PackageManifest(
         directory=package_dir,
         files=dict(data["files"]),
         inputs={key: list(value) for key, value in data.get("inputs", {}).items()},
         params=dict(data.get("params", {})),
         overrides=list(data.get("overrides", [])),
+        contract=str(data.get("contract", MAIN_CONTRACT)),
     )
+    if contract is not None and manifest.contract != contract:
+        return None
+    return manifest

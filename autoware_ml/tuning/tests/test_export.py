@@ -85,3 +85,47 @@ def test_manifest_round_trips_and_requires_every_file(tmp_path: Path) -> None:
     assert loaded.files == manifest.files and loaded.inputs == manifest.inputs
     assert loaded.params == manifest.params and loaded.overrides == manifest.overrides
     assert load_manifest(tmp_path / "missing") is None
+
+
+def test_legacy_feat4_spec_takes_four_features_and_keeps_the_rest() -> None:
+    import torch
+    from torch import nn
+
+    from autoware_ml.tuning.export import LEGACY_CONTRACT, legacy_feat4_encoder_spec
+    from autoware_ml.utils.deploy import ExportSpec
+
+    class VoxelEncoder(nn.Module):
+        out_channels = 11
+
+    class Inner(nn.Module):
+        def __init__(self) -> None:
+            super().__init__()
+            self.voxel_encoder = VoxelEncoder()
+
+        def forward(self, voxels, num_points, grid_coord, *rest):
+            feat = self.voxel_encoder(voxels, num_points)
+            return (feat, grid_coord, *rest)
+
+    voxels = torch.rand(6, 3, 5)
+    spec = ExportSpec(
+        module=Inner(),
+        args=(voxels, torch.ones(6), torch.zeros(6, 3, dtype=torch.int32), torch.zeros(1, 6)),
+        input_param_names=[
+            "voxels",
+            "num_points_per_voxel",
+            "grid_coord",
+            "serialized_pooling_0_indices",
+        ],
+        output_names=["point_feat_0"],
+        dynamic_axes={"voxels": {0: "num_voxels"}, "grid_coord": {0: "num_voxels"}},
+    )
+    legacy = legacy_feat4_encoder_spec(spec, torch.device("cpu"))
+    assert legacy.input_param_names == ["grid_coord", "feat", "serialized_pooling_0_indices"]
+    assert legacy.args[1].shape == (6, 4)
+    assert torch.equal(legacy.args[1], voxels[:, 0, :4])
+    assert legacy.dynamic_axes == {"grid_coord": {0: "num_voxels"}, "feat": {0: "num_voxels"}}
+    feat, grid_coord, pooling = legacy.module(*legacy.args)
+    assert feat.shape == (6, 11)
+    assert torch.equal(feat[:, :3], voxels[:, 0, :3])
+    assert grid_coord.shape == (6, 3) and pooling.shape == (1, 6)
+    assert LEGACY_CONTRACT == "legacy_feat4"
