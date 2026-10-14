@@ -150,6 +150,18 @@ class WidthPreset:
 WIDTH_PRESETS: Mapping[str, WidthPreset] = {
     preset.name: preset
     for preset in (
+        # Two rungs above the published widths, for studies under the
+        # PTv3-tiny bound: there the best ``large`` cells of the third study
+        # used 16 to 19 of the 23.8 ms and accuracy still rose with latency,
+        # so the top of the ladder was binding, not the bound. Same 16
+        # channels per head as ``large``, for the same TensorRT reason.
+        WidthPreset(
+            "xlarge",
+            (64, 128, 256, 512, 1024),
+            (4, 8, 16, 32, 64),
+            (128, 128, 256, 512),
+            (8, 8, 16, 32),
+        ),
         # One rung above the published widths, added when the latency bound
         # moved from LitePT-tiny's to PTv3-tiny's: the ladder below tops out
         # at about 9 M encoder parameters, and the question under the wider
@@ -189,6 +201,9 @@ WIDTH_PRESETS: Mapping[str, WidthPreset] = {
 # arithmetic per block at every stage, attention stages cost parameters and
 # kernel launches instead, so the two are sampled independently.
 CONV_DEPTH_PRESETS: Mapping[str, tuple[int, ...]] = {
+    # One rung above the shipped depth: convolution blocks are cheap on the
+    # bench, and 2-2-2 beat 1-1-1 by 0.02 mIoU in the third study.
+    "3-3-3": (3, 3, 3),
     "2-2-2": (2, 2, 2),
     "1-1-1": (1, 1, 1),
 }

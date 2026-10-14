@@ -52,8 +52,8 @@ def test_width_presets_keep_one_head_dim_and_rotate_most_of_it(name: str) -> Non
     preset = WIDTH_PRESETS[name]
     assert preset.head_dim >= presets.ROPE_MIN_HEAD_DIM
     # tiny is the PTv3 comparability anchor and knowingly leaves 4 dims unrotated;
-    # large shares its 16-channel heads because those are the ones that build.
-    assert preset.fully_rotated or name in ("tiny", "large")
+    # large and xlarge share its 16-channel heads because those are the ones that build.
+    assert preset.fully_rotated or name in ("tiny", "large", "xlarge")
 
 
 def test_shipped_configs_are_expressible() -> None:
