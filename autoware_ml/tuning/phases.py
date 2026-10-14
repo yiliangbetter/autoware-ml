@@ -61,6 +61,7 @@ from autoware_ml.tuning.study import (
     ATTR_BENCH_ATTEMPTS,
     ATTR_CHECKPOINT,
     ATTR_CONSTRAINTS,
+    ATTR_DUPLICATE_OF,
     ATTR_ERROR,
     ATTR_HYDRA_DIR,
     ATTR_LATENCY,
@@ -76,6 +77,7 @@ from autoware_ml.tuning.study import (
     ATTR_TRAIN_LOG,
     ATTR_TRAINED_HERE,
     PHASE_ASKED,
+    PHASE_DUPLICATE,
     PHASE_IMPORTED,
     PHASE_MEASURED,
     PHASE_REJECTED,
@@ -144,6 +146,10 @@ STATUS_QUEUE_FULL = "queue_full"
 STATUS_TERMINATED = "terminated"
 STATUS_BUDGET = "budget_reached"
 STATUS_IDLE = "idle"
+STATUS_DUPLICATE = "duplicate"
+# Trial states whose parameters are covered: told, or still in the pipeline.
+# A failed trial covers nothing, so its configuration may be proposed again.
+COVERING_STATES = (TrialState.COMPLETE, TrialState.PRUNED, TrialState.RUNNING)
 
 
 class TrainerBusyError(RuntimeError):
@@ -393,11 +399,80 @@ def build_train_command(context: TuningContext, overrides: Sequence[str]) -> tup
     return tuple(argv)
 
 
-def ask_trial(context: TuningContext) -> tuple[optuna.Trial, TrialProposal] | None:
+def skip_duplicates_enabled(context: TuningContext) -> bool:
+    """Whether proposals repeating an earlier trial are skipped (``tuning.skip_duplicates``)."""
+    return bool(context.tuning.get("skip_duplicates", True))
+
+
+def find_duplicate(
+    study: optuna.Study, params: Mapping[str, Any], number: int
+) -> FrozenTrial | None:
+    """Return the earliest trial before ``number`` that covers the same parameters.
+
+    The search space is categorical, so equal parameters mean the same
+    architecture and recipe: its latency is already known or being measured,
+    and its accuracy differs only by run-to-run noise. Failed trials cover
+    nothing.
+    """
+    if not params:
+        return None
+    for other in sorted(
+        study.get_trials(deepcopy=False, states=COVERING_STATES), key=lambda t: t.number
+    ):
+        if other.number >= number:
+            break
+        if other.params == params:
+            return other
+    return None
+
+
+def skip_duplicate(
+    context: TuningContext, trial: optuna.Trial | FrozenTrial, original: FrozenTrial
+) -> TrialOutcome:
+    """Fail a trial that repeats ``original``, recording which one it repeats.
+
+    It is told as failed, which the sampler ignores: a repeated value would
+    weigh that configuration twice, and a pruned state would read as an
+    infeasible one. The original keeps the verdict.
+    """
+    live = trial if isinstance(trial, optuna.Trial) else _running_trial(context.study, trial)
+    verdict = original.user_attrs.get(ATTR_PHASE, original.state.name.lower())
+    detail = f"same parameters as trial {original.number} ({verdict})"
+    _set_attrs(
+        live,
+        {ATTR_DUPLICATE_OF: original.number, ATTR_PHASE: PHASE_DUPLICATE, ATTR_ERROR: detail},
+    )
+    context.study.tell(live.number, state=TrialState.FAIL)
+    logger.info("Trial %d skipped: %s", live.number, detail)
+    return TrialOutcome(live.number, STATUS_DUPLICATE, detail)
+
+
+def skip_duplicate_trials(context: TuningContext) -> list[TrialOutcome]:
+    """Skip waiting trials that repeat an earlier trial of the study.
+
+    Covers trials asked or screened before the check existed. A trial whose
+    training was launched belongs to the trainer and is left alone, and so
+    is every reference trial.
+    """
+    if not skip_duplicates_enabled(context):
+        return []
+    outcomes = []
+    for phase in (PHASE_ASKED, PHASE_SCREENED):
+        for frozen in trials_in_phase(context.study, phase):
+            if frozen.user_attrs.get(ATTR_REFERENCE) or frozen.user_attrs.get(ATTR_TRAINED_HERE):
+                continue
+            original = find_duplicate(context.study, frozen.params, frozen.number)
+            if original is not None:
+                outcomes.append(skip_duplicate(context, frozen, original))
+    return outcomes
+
+
+def ask_trial(context: TuningContext) -> tuple[optuna.Trial, TrialProposal] | TrialOutcome:
     """Ask the sampler for a configuration and record it on the trial.
 
-    A proposal rejected by the static filter is told as pruned and ``None``
-    is returned, so the caller can ask again without spending anything.
+    A proposal that repeats an earlier trial is failed, and one rejected by
+    the static filter is told as pruned; either way the outcome is returned
+    instead, so the caller can ask again without spending anything.
     """
     study = context.study
     trial = study.ask()
@@ -410,12 +485,16 @@ def ask_trial(context: TuningContext) -> tuple[optuna.Trial, TrialProposal] | No
             ATTR_STATIC: dict(proposal.static),
         },
     )
+    if skip_duplicates_enabled(context) and not trial.user_attrs.get(ATTR_REFERENCE):
+        original = find_duplicate(study, trial.params, trial.number)
+        if original is not None:
+            return skip_duplicate(context, trial, original)
     reason = static_rejection(context, proposal)
     if reason is not None:
         trial.set_user_attr(ATTR_ERROR, reason)
         study.tell(trial, state=TrialState.PRUNED)
         logger.info("Trial %d pruned before training: %s", trial.number, reason)
-        return None
+        return TrialOutcome(trial.number, STATUS_PRUNED, reason)
     return trial, proposal
 
 
@@ -475,11 +554,15 @@ def prepare_trial_launch(
     context: TuningContext,
     gpu: str | None = None,
     extra_train_overrides: Sequence[str] = (),
-) -> TrainLaunch | None:
-    """Ask the sampler for a trial and prepare its training run (proxy workflow)."""
+) -> TrainLaunch | TrialOutcome:
+    """Ask the sampler for a trial and prepare its training run (proxy workflow).
+
+    Returns:
+        The launch, or the outcome of a proposal that was not worth training.
+    """
     asked = ask_trial(context)
-    if asked is None:
-        return None
+    if isinstance(asked, TrialOutcome):
+        return asked
     trial, _ = asked
     return prepare_launch(context, trial, gpu, extra_train_overrides)
 
@@ -623,6 +706,7 @@ def run_train_phase(
     queue = None
     if context.bench_mode:
         outcomes.extend(tell_known_trials(context))
+        outcomes.extend(skip_duplicate_trials(context))
         queue = deque(trials_in_phase(context.study, PHASE_SCREENED))
     running: list[tuple[TrainLaunch, TrialProcess]] = []
     launched = 0
@@ -641,9 +725,9 @@ def run_train_phase(
             else:
                 asked += 1
                 launch = prepare_trial_launch(context, gpu, extra_train_overrides)
-                if launch is None:
+                if isinstance(launch, TrialOutcome):
                     slots.appendleft(gpu)
-                    outcomes.append(TrialOutcome(asked - 1, STATUS_PRUNED, "static filter"))
+                    outcomes.append(launch)
                     continue
             logger.info(
                 "Trial %d: training on %s, log %s",
@@ -1099,7 +1183,7 @@ def drain_waiting_trials(context: TuningContext) -> list[FrozenTrial]:
     waiting = study.get_trials(deepcopy=False, states=(TrialState.WAITING,))
     for _ in waiting:
         result = ask_trial(context)
-        if result is None:
+        if isinstance(result, TrialOutcome):
             continue
         trial, _ = result
         asked.append(study._storage.get_trial(trial._trial_id))
@@ -1358,6 +1442,7 @@ def run_screen_phase(
     limit_measurements = n_trials if n_trials is not None else 10**9
     drain_waiting_trials(context)
     outcomes.extend(tell_known_trials(context))
+    outcomes.extend(skip_duplicate_trials(context))
     target = queue_target if queue_target is not None else settings.queue.target_at(window, current)
     terminated = study_terminated(study) is not None and not ignore_termination
     budget = training_budget_left(context)
@@ -1410,8 +1495,8 @@ def run_screen_phase(
                     ):
                         asks += 1
                         asked = ask_trial(context)
-                        if asked is None:
-                            outcomes.append(TrialOutcome(-1, STATUS_PRUNED, "static filter"))
+                        if isinstance(asked, TrialOutcome):
+                            outcomes.append(asked)
                             continue
                         trial, _ = asked
                         progressed |= export_quietly(study._storage.get_trial(trial._trial_id))

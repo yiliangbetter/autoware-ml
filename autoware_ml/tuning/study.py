@@ -47,6 +47,8 @@ PHASE_SCREENED = "screened"
 PHASE_TRAINED = "trained"
 PHASE_MEASURED = "measured"
 PHASE_REJECTED = "rejected"
+# A proposal with the parameters of an earlier trial, failed without spending anything.
+PHASE_DUPLICATE = "duplicate"
 
 ATTR_OVERRIDES = "overrides"
 ATTR_STATIC = "static"
@@ -68,6 +70,7 @@ ATTR_ERROR = "error"
 ATTR_MEASURE_ATTEMPTS = "measure_attempts"
 ATTR_IMPORT = "imported_from"
 ATTR_TRAINED_HERE = "trained_here"
+ATTR_DUPLICATE_OF = "duplicate_of"
 
 # Study-level attributes written by the termination check.
 STUDY_ATTR_REFERENCE_LATENCY = "reference_latency"
@@ -418,9 +421,15 @@ def reference_latency_ms(study: optuna.Study, constraints: Sequence[Constraint])
 
 
 def count_trained_here(study: optuna.Study) -> int:
-    """Count the trials whose training this study paid for."""
+    """Count the trials whose training this study paid for.
+
+    A training stopped because its trial turned out to repeat an earlier one
+    does not count: the budget is spent on distinct configurations.
+    """
     return sum(
-        1 for trial in study.get_trials(deepcopy=False) if trial.user_attrs.get(ATTR_TRAINED_HERE)
+        1
+        for trial in study.get_trials(deepcopy=False)
+        if trial.user_attrs.get(ATTR_TRAINED_HERE) and ATTR_DUPLICATE_OF not in trial.user_attrs
     )
 
 

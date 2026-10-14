@@ -637,3 +637,85 @@ def test_imported_trials_are_told_outright_by_their_bench_latency(
     assert base.user_attrs[ATTR_CONSTRAINTS] == pytest.approx([-0.05, 2.4])
     assert small.user_attrs[ATTR_CONSTRAINTS] == pytest.approx([0.05, -3.6])
     assert "best feasible trial: #1" in format_status(bench_context)
+
+
+from autoware_ml.tuning.phases import STATUS_DUPLICATE, find_duplicate  # noqa: E402
+from autoware_ml.tuning.study import ATTR_DUPLICATE_OF, PHASE_DUPLICATE  # noqa: E402
+
+
+def _enqueue_repeat(context: TuningContext, params: dict) -> None:
+    context.study.enqueue_trial(context.search_space.validate_params(params))
+
+
+def test_a_proposal_repeating_an_earlier_trial_is_failed_before_export(
+    bench_context: TuningContext,
+) -> None:
+    _enqueue_repeat(bench_context, TINY)
+    runner = _FakeRunner()
+    exported: list[int] = []
+
+    def exporter(ctx, trial):
+        exported.append(trial.number)
+        return _fake_exporter(ctx, trial)
+
+    outcomes = run_screen_phase(bench_context, runner, now=OPEN, queue_target=0, exporter=exporter)
+    study = bench_context.study
+    repeat = study.trials[1]
+    assert repeat.state == TrialState.FAIL
+    assert repeat.user_attrs[ATTR_DUPLICATE_OF] == 0
+    assert repeat.user_attrs[ATTR_PHASE] == PHASE_DUPLICATE
+    # Only the reference is exported and timed; the repeat costs nothing.
+    assert set(exported) == {0} and len(runner.calls) == 1
+    assert STATUS_DUPLICATE not in [o.status for o in outcomes if o.trial_number == 0]
+    assert "duplicate=1" in format_status(bench_context)
+
+
+def test_screened_repeats_are_skipped_by_the_trainer_and_not_paid_for(
+    bench_context: TuningContext,
+) -> None:
+    # Queue a repeat the way studies did before the check existed.
+    bench_context.cfg.tuning.skip_duplicates = False
+    _enqueue_repeat(bench_context, TINY)
+    run_screen_phase(
+        bench_context, _FakeRunner(), now=OPEN, queue_target=0, exporter=_fake_exporter
+    )
+    study = bench_context.study
+    assert screened_queue_length(bench_context) == 2
+    bench_context.cfg.tuning.skip_duplicates = True
+    launcher = _launcher()
+    outcomes = run_train_phase(bench_context, n_trials=2, launcher=launcher, poll_interval=0.0)
+    assert [(o.trial_number, o.status) for o in outcomes] == [
+        (1, STATUS_DUPLICATE),
+        (0, STATUS_TRAINED),
+    ]
+    assert [launch.trial_number for launch in launcher.launches] == [0]
+    assert study.trials[1].state == TrialState.FAIL
+    assert count_trained_here(study) == 1
+
+
+def test_failed_trials_cover_nothing_and_reference_trials_are_never_repeats(
+    bench_context: TuningContext,
+) -> None:
+    study = bench_context.study
+    space = bench_context.search_space
+    reference = drain_waiting_trials(bench_context)[0]
+    assert find_duplicate(study, reference.params, reference.number) is None
+    # A repeat of a running trial is caught; once the original fails, it is not.
+    assert find_duplicate(study, reference.params, reference.number + 1).number == 0
+    study.tell(reference.number, state=TrialState.FAIL)
+    assert find_duplicate(study, reference.params, reference.number + 1) is None
+    # A queued reference with known parameters is always measured.
+    study.enqueue_trial(space.validate_params(TINY), user_attrs={"reference": "litept_tiny"})
+    _enqueue_repeat(bench_context, TINY)
+    asked = drain_waiting_trials(bench_context)
+    assert [t.number for t in asked] == [1]
+    assert study.trials[2].user_attrs[ATTR_DUPLICATE_OF] == 1
+
+
+def test_a_stopped_repeat_does_not_count_against_the_budget(bench_context: TuningContext) -> None:
+    study = bench_context.study
+    trial = study.ask()
+    trial.set_user_attr(ATTR_TRAINED_HERE, True)
+    assert count_trained_here(study) == 1
+    trial.set_user_attr(ATTR_DUPLICATE_OF, 0)
+    assert count_trained_here(study) == 0
