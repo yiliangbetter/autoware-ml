@@ -36,6 +36,7 @@ from autoware_ml.tuning.phases import (
 from autoware_ml.tuning.study import (
     SQLITE_PREFIX,
     build_sampler,
+    configured_references,
     enqueue_reference_trials,
     find_reference_trial,
     load_constraints,
@@ -97,7 +98,7 @@ def load_context(config_name: str, extra_args: Sequence[str] = ()) -> TuningCont
     if terminator_settings is not None and len(objectives) != 1:
         raise ValueError("The termination criterion applies to single-objective studies only.")
     if bench is not None and find_reference_trial is not None:
-        references = tuning.get("reference_trials") or {}
+        references = configured_references(tuning.get("reference_trials"))
         if bench.reference not in references:
             raise ValueError(
                 f"bench.reference {bench.reference!r} is not one of the configured "
@@ -109,7 +110,7 @@ def load_context(config_name: str, extra_args: Sequence[str] = ()) -> TuningCont
             raise ValueError(f"reference_models.{name} needs a config_name.")
     for constraint in constraints:
         if constraint.reference is not None and constraint.reference not in {
-            *(tuning.get("reference_trials") or {}),
+            *configured_references(tuning.get("reference_trials")),
             *models,
         }:
             raise ValueError(

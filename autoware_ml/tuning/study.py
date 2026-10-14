@@ -510,8 +510,8 @@ def enqueue_reference_trials(
         for trial in study.get_trials(deepcopy=False)
         if trial.user_attrs.get(ATTR_REFERENCE)
     }
-    for name, params in (references or {}).items():
-        normalized = search_space.validate_params(_to_plain(params))
+    for name, params in configured_references(references).items():
+        normalized = search_space.validate_params(params)
         if name in existing:
             continue
         study.enqueue_trial(normalized, user_attrs={ATTR_REFERENCE: name}, skip_if_exists=True)
@@ -526,10 +526,26 @@ def reference_name_for_params(
 ) -> str | None:
     """Return the configured reference whose cell ``params`` falls in, if any."""
     cell = search_space.cell_key(params)
-    for name, reference in (references or {}).items():
-        if search_space.cell_key(_to_plain(reference)) == cell:
+    for name, reference in configured_references(references).items():
+        if search_space.cell_key(reference) == cell:
             return name
     return None
+
+
+def configured_references(
+    references: Mapping[str, Mapping[str, Any] | None] | None,
+) -> dict[str, dict[str, Any]]:
+    """Return the reference trials in force, as plain dicts.
+
+    A study config inherits the reference trials of the config it extends;
+    setting one to ``null`` drops it, for a search space the inherited
+    cell no longer belongs to.
+    """
+    return {
+        str(name): dict(_to_plain(params))
+        for name, params in (references or {}).items()
+        if params is not None
+    }
 
 
 def _to_plain(value: Any) -> Any:

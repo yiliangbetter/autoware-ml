@@ -28,11 +28,10 @@ from autoware_ml.tuning.study import (
     ATTR_CONSTRAINTS,
     ATTR_PHASE,
     ATTR_REFERENCE,
-    PHASE_TRAINED,
-    Constraint,
-    Objective,
     best_feasible_trial,
     build_sampler,
+    configured_references,
+    Constraint,
     constraint_values,
     constraints_from_user_attrs,
     enqueue_reference_trials,
@@ -40,8 +39,10 @@ from autoware_ml.tuning.study import (
     find_reference_trial,
     load_constraints,
     load_objectives,
+    Objective,
     objective_values,
     open_study,
+    PHASE_TRAINED,
     reference_latency_ms,
     reference_name_for_params,
     resolve_storage_url,
@@ -215,6 +216,14 @@ def test_enqueue_reference_trials_is_idempotent_and_validated(tmp_path: Path) ->
     assert enqueue_reference_trials(study, space, references) == []
     with pytest.raises(ValueError, match="not one of the allowed"):
         enqueue_reference_trials(study, space, {"bad": {**TINY, "width_preset": "giant"}})
+    # A study config inherits reference trials; null drops one the space no longer holds.
+    narrow = LitePTSearchSpace(width_presets=("base",))
+    dropped = {"tiny": None, "base": references["base"]}
+    assert configured_references(dropped) == {"base": references["base"]}
+    assert enqueue_reference_trials(study, narrow, dropped) == []  # base is queued already
+    assert reference_name_for_params(narrow, dropped, references["base"]) == "base"
+    other = {**references["base"], "attn_depth_preset": "4-2"}
+    assert reference_name_for_params(narrow, dropped, other) is None
 
 
 def test_trials_in_phase_lists_running_trials_by_number() -> None:
