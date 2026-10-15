@@ -30,6 +30,7 @@ from autoware_ml.tuning.phases import (
     export_trial_package,
     format_status,
     run_measure_phase,
+    drain_waiting_trials,
     run_screen_phase,
     run_train_phase,
 )
@@ -38,10 +39,12 @@ from autoware_ml.tuning.study import (
     build_sampler,
     configured_references,
     enqueue_reference_trials,
+    METRIC_SOURCE,
     find_reference_trial,
     load_constraints,
     load_objectives,
     open_study,
+    reference_latency_ms,
     resolve_storage_url,
 )
 from autoware_ml.tuning.terminator import StudyTerminator, TerminatorSettings
@@ -188,24 +191,42 @@ def import_study(
     from_storage: Sequence[str] = (),
     from_study: Sequence[str] = (),
 ) -> None:
-    """Import the measured trials of other studies."""
+    """Import the measured trials and the bench verdicts of other studies."""
     context = load_context(config_name, extra_args)
     if not from_storage or not from_study:
         raise ValueError("--from-storage and --from-study are required.")
+    # Queued reference trials are asked first so an imported cell can attach
+    # its results to them instead of entering the study a second time.
+    drain_waiting_trials(context)
+    metric_objective = next(
+        (o.name for o in context.objectives if o.source == METRIC_SOURCE),
+        context.objectives[0].name,
+    )
     outcomes = import_trials(
         context.study,
         context.search_space,
         source_storage=from_storage,
         source_study=from_study,
-        objective_metric=context.objectives[0].name,
+        objective_metric=metric_objective,
         references=context.tuning.get("reference_trials"),
+        constraints=context.constraints,
+        reference_latency_ms=reference_latency_ms(context.study, context.constraints),
+        unbuildable_violation_ms=(
+            context.bench.unbuildable_violation_ms if context.bench is not None else 100.0
+        ),
     )
     for outcome in outcomes:
         target = "" if outcome.trial_number is None else f" -> trial {outcome.trial_number}"
         print(f"source {outcome.sources}: {outcome.status}{target} {outcome.detail}".rstrip())
-    imported = sum(1 for outcome in outcomes if outcome.status == "imported")
-    attached = sum(1 for outcome in outcomes if outcome.status == "attached")
-    print(f"Imported {imported} cell(s) and attached {attached} from {', '.join(from_study)}.")
+    counts = {
+        status: sum(1 for outcome in outcomes if outcome.status == status)
+        for status in ("imported", "attached", "rejected", "screened", "skipped")
+    }
+    print(
+        f"Imported {counts['imported']} measured cell(s), attached {counts['attached']}, "
+        f"carried {counts['rejected']} rejection(s) and {counts['screened']} screened cell(s), "
+        f"skipped {counts['skipped']} from {', '.join(from_study)}."
+    )
 
 
 def screen_trials(

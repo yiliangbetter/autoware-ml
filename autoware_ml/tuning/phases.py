@@ -638,12 +638,31 @@ def finish_trial_launch(
 
 
 def tell_known_trials(context: TuningContext) -> list[TrialOutcome]:
-    """Tell screened trials whose accuracy was imported instead of training them."""
+    """Tell screened trials whose accuracy was imported instead of training them.
+
+    Telling needs the latency bound, so while a relative bound's reference
+    is still unmeasured the trials wait, as trained trials do.
+    """
     outcomes = []
-    for frozen in trials_in_phase(context.study, PHASE_SCREENED):
-        metrics = frozen.user_attrs.get(ATTR_METRICS)
-        if metrics is None:
-            continue
+    known = [
+        frozen
+        for frozen in trials_in_phase(context.study, PHASE_SCREENED)
+        if frozen.user_attrs.get(ATTR_METRICS) is not None
+    ]
+    if not known:
+        return outcomes
+    relative = [c for c in latency_constraints(context.constraints) if c.reference is not None]
+    if relative and reference_latency_ms(context.study, context.constraints) is None:
+        return [
+            TrialOutcome(
+                -1,
+                STATUS_SKIPPED,
+                f"{len(known)} trial(s) with imported accuracy wait: the latency of reference "
+                f"{relative[0].reference!r} is still unknown",
+            )
+        ]
+    for frozen in known:
+        metrics = frozen.user_attrs[ATTR_METRICS]
         values = tell_measured(context, frozen, metrics)
         told = context.study._storage.get_trial(frozen._trial_id)
         status = STATUS_MEASURED if trial_is_feasible(told) else STATUS_REJECTED

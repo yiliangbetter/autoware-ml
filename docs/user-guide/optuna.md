@@ -187,7 +187,12 @@ phases that each run as their own batch:
    trials, the known-good configurations the study has to beat.
 2. `tune import` carries the measured trials of an earlier study over, one per
    architecture with replicates averaged, so the sampler starts from real
-   observations instead of its random phase. They only lack a bench latency.
+   observations instead of its random phase. A cell timed on the bench brings
+   its latency along and is told outright; one without is timed first. The
+   bench verdicts of cells that never trained come too, judged against the
+   new study's bound: unbuildable stays infeasible, over the bound is pruned,
+   under it joins the training queue. Verdicts need the bound, so run the
+   import again after the first screen; cells already present are skipped.
 3. `tune screen` asks the sampler for trials, exports each with its initial
    weights, ships the package to the bench and runs the inference harness
    there. The reference models and the reference trial go first because the

@@ -144,3 +144,131 @@ def test_import_attaches_accuracy_to_a_queued_reference_trial(tmp_path: Path) ->
     assert trial.user_attrs[ATTR_REFERENCE] == "litept_tiny"
     assert trial.user_attrs[ATTR_IMPORT]["trials"] == [0]
     assert len(study.get_trials(deepcopy=False)) == 3
+
+
+from autoware_ml.tuning.study import (  # noqa: E402
+    ATTR_BENCH,
+    ATTR_CONSTRAINTS,
+    ATTR_ERROR,
+    PHASE_REJECTED,
+    PHASE_SCREENED,
+    load_constraints,
+)
+
+RELATIVE = load_constraints(
+    [{"source": "latency", "name": "latency_ms", "reference": "ptv3_tiny", "margin_ms": 0.0}]
+)
+
+
+def _bench(latency: float) -> dict:
+    return {"latency_ms": latency, "metric": "gpu_total_ms", "ci95_ms": 0.05, "replicates": 7}
+
+
+def _bench_source_study(tmp_path: Path) -> tuple[str, str]:
+    """A bench-screened study: measured cells with latencies, and three untrained verdicts."""
+    storage = f"sqlite:///{tmp_path / 'bench_source.db'}"
+    study = optuna.create_study(study_name="bench_old", storage=storage, direction="maximize")
+    space = LitePTSearchSpace()
+
+    def add(params, **attrs):
+        study.enqueue_trial(params, user_attrs=attrs)
+        trial = study.ask()
+        space.suggest(trial)
+        return trial
+
+    # Two replicates of the reference cell, timed once; one more measured cell.
+    first = add(TINY, **{ATTR_REFERENCE: "litept_tiny", ATTR_BENCH: _bench(14.5)})
+    first.set_user_attr(ATTR_METRICS, {MIOU: 0.700})
+    study.tell(first, 0.700)
+    second = add(TINY, **{ATTR_BENCH: _bench(14.7)})
+    second.set_user_attr(ATTR_METRICS, {MIOU: 0.690})
+    study.tell(second, 0.690)
+    medium = add({**TINY, "width_preset": "medium"}, **{ATTR_BENCH: _bench(13.3)})
+    medium.set_user_attr(ATTR_METRICS, {MIOU: 0.688})
+    study.tell(medium, 0.688)
+    # Rejected on the bench: too slow against the old bound, and unbuildable.
+    slow = add(
+        {**TINY, "patch_size": 1024}, **{ATTR_BENCH: _bench(30.0), ATTR_PHASE: PHASE_REJECTED}
+    )
+    study.tell(slow, state=TrialState.PRUNED)
+    unbuilt = add(
+        {**TINY, "width_preset": "base"},
+        **{ATTR_PHASE: PHASE_REJECTED, ATTR_ERROR: "engines do not build on the target: Gather"},
+    )
+    study.tell(unbuilt, state=TrialState.PRUNED)
+    # Screened under the old bound, never trained.
+    add({**TINY, "mlp_ratio": 2}, **{ATTR_BENCH: _bench(12.0), ATTR_PHASE: PHASE_SCREENED})
+    return storage, "bench_old"
+
+
+def test_import_carries_bench_latencies_and_verdicts_once_the_bound_is_known(
+    tmp_path: Path,
+) -> None:
+    storage, name = _bench_source_study(tmp_path)
+    objectives = load_objectives(
+        [
+            {"name": "latency_ms", "direction": "minimize", "source": "latency"},
+            {"name": MIOU, "direction": "maximize"},
+        ]
+    )
+    study = open_study(
+        "new", f"sqlite:///{tmp_path / 'new.db'}", objectives, build_sampler(None, len(RELATIVE))
+    )
+    space = LitePTSearchSpace()
+    # Before the bound is measured: measured cells come in with their latency,
+    # verdicts wait.
+    outcomes = import_trials(
+        study,
+        space,
+        source_storage=[storage],
+        source_study=[name],
+        objective_metric=MIOU,
+        constraints=RELATIVE,
+        reference_latency_ms=None,
+    )
+    by_status = {}
+    for outcome in outcomes:
+        by_status.setdefault(outcome.status, []).append(outcome)
+    assert len(by_status["imported"]) == 2 and len(by_status["skipped"]) == 3
+    assert all("waits for the reference latency" in o.detail for o in by_status["skipped"])
+    tiny = next(t for t in study.trials if t.user_attrs.get(ATTR_REFERENCE) == "litept_tiny")
+    assert tiny.user_attrs[ATTR_PHASE] == PHASE_SCREENED
+    assert tiny.user_attrs[ATTR_BENCH]["latency_ms"] == pytest.approx(14.6)
+    assert tiny.user_attrs[ATTR_BENCH]["imported_replicates"] == 2
+    assert tiny.user_attrs[ATTR_METRICS][MIOU] == pytest.approx(0.695)
+    # With the bound known (25 ms): the slow cell is rejected again, the
+    # unbuildable one stays infeasible, the screened one joins the queue.
+    outcomes = import_trials(
+        study,
+        space,
+        source_storage=[storage],
+        source_study=[name],
+        objective_metric=MIOU,
+        constraints=RELATIVE,
+        reference_latency_ms=25.0,
+        unbuildable_violation_ms=100.0,
+    )
+    statuses = sorted(o.status for o in outcomes)
+    assert statuses == ["rejected", "rejected", "screened", "skipped", "skipped"]
+    pruned = [t for t in study.trials if t.state == TrialState.PRUNED]
+    assert len(pruned) == 2
+    slow = next(t for t in pruned if t.params["patch_size"] == 1024)
+    assert slow.user_attrs[ATTR_CONSTRAINTS] == [pytest.approx(5.0)]
+    assert "exceeds the bound 25.00 ms" in slow.user_attrs[ATTR_ERROR]
+    unbuilt = next(t for t in pruned if t.params["width_preset"] == "base")
+    assert unbuilt.user_attrs[ATTR_CONSTRAINTS] == [100.0] and ATTR_BENCH not in unbuilt.user_attrs
+    queued = next(t for t in study.trials if t.params.get("mlp_ratio") == 2)
+    assert queued.state == TrialState.RUNNING and queued.user_attrs[ATTR_PHASE] == PHASE_SCREENED
+    assert ATTR_METRICS not in queued.user_attrs
+    # Importing once more changes nothing.
+    again = import_trials(
+        study,
+        space,
+        source_storage=[storage],
+        source_study=[name],
+        objective_metric=MIOU,
+        constraints=RELATIVE,
+        reference_latency_ms=25.0,
+    )
+    assert {o.status for o in again} == {"skipped"}
+    assert len(study.trials) == 5
