@@ -719,3 +719,42 @@ def test_a_stopped_repeat_does_not_count_against_the_budget(bench_context: Tunin
     assert count_trained_here(study) == 1
     trial.set_user_attr(ATTR_DUPLICATE_OF, 0)
     assert count_trained_here(study) == 0
+
+
+def test_screened_trial_with_imported_accuracy_is_not_trained_while_the_bound_is_unknown(
+    bench_context: TuningContext,
+) -> None:
+    # An import gave this cell its accuracy and its bench latency before the
+    # reference was measured, so it cannot be told yet; it must not be trained.
+    study = bench_context.study
+    space = bench_context.search_space
+    study.enqueue_trial(
+        space.validate_params({**TINY, "mlp_ratio": 2}),
+        user_attrs={
+            ATTR_PHASE: PHASE_SCREENED,
+            ATTR_METRICS: {MIOU: 0.70, DEBRIS: 0.5},
+            ATTR_BENCH: {"latency_ms": 13.0, "ci95_ms": 0.05},
+        },
+    )
+    # The queue holds the reference first; ask both so the imported cell is RUNNING.
+    for _ in range(2):
+        trial = study.ask()
+        trial.set_user_attr(ATTR_OVERRIDES, list(space.suggest(trial).overrides))
+    imported = study.trials[1]
+    assert imported.user_attrs[ATTR_PHASE] == PHASE_SCREENED
+    launcher = _launcher()
+    outcomes = run_train_phase(bench_context, n_trials=1, launcher=launcher, poll_interval=0.0)
+    assert launcher.launches == []
+    assert [o.status for o in outcomes] == [STATUS_SKIPPED, STATUS_IDLE]
+    assert "still unknown" in outcomes[0].detail
+    assert study.trials[1].state == TrialState.RUNNING
+    # Once the reference is timed, the next phase tells it without training.
+    screened = run_screen_phase(
+        bench_context, _FakeRunner(), now=OPEN, n_trials=1, queue_target=0, exporter=_fake_exporter
+    )
+    assert any(o.trial_number == 0 and o.status == STATUS_SCREENED for o in screened)
+    outcomes = run_train_phase(bench_context, n_trials=1, launcher=launcher, poll_interval=0.0)
+    told = study.trials[1]
+    assert told.state == TrialState.COMPLETE and told.values == [pytest.approx(0.70)]
+    assert [launch.trial_number for launch in launcher.launches] == [0]
+    assert count_trained_here(study) == 1

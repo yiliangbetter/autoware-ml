@@ -670,6 +670,20 @@ def tell_known_trials(context: TuningContext) -> list[TrialOutcome]:
     return outcomes
 
 
+def trials_awaiting_training(study: optuna.Study) -> list[FrozenTrial]:
+    """Screened trials without an accuracy: the ones the trainer has to run.
+
+    A screened trial that already carries imported metrics only waits to be
+    told once the latency bound is known; training it again would spend a
+    budget slot on a known result.
+    """
+    return [
+        trial
+        for trial in trials_in_phase(study, PHASE_SCREENED)
+        if trial.user_attrs.get(ATTR_METRICS) is None
+    ]
+
+
 def training_budget_left(context: TuningContext) -> int | None:
     """Return how many trainings the budget still allows, ``None`` for unlimited."""
     cap = context.max_trained_trials
@@ -726,7 +740,7 @@ def run_train_phase(
     if context.bench_mode:
         outcomes.extend(tell_known_trials(context))
         outcomes.extend(skip_duplicate_trials(context))
-        queue = deque(trials_in_phase(context.study, PHASE_SCREENED))
+        queue = deque(trials_awaiting_training(context.study))
     running: list[tuple[TrainLaunch, TrialProcess]] = []
     launched = 0
     asked = 0
@@ -1391,7 +1405,7 @@ def pending_screen_trials(context: TuningContext) -> list[FrozenTrial]:
 
 def screened_queue_length(context: TuningContext) -> int:
     """Number of latency-feasible trials waiting for training."""
-    return len(trials_in_phase(context.study, PHASE_SCREENED))
+    return len(trials_awaiting_training(context.study))
 
 
 def in_flight_count(context: TuningContext) -> int:
