@@ -35,6 +35,7 @@ def parse_exclusion_rules(rules: Sequence[Sequence[str]]) -> frozenset[tuple[str
             )
     return frozenset((str(rule[0]), str(rule[1])) for rule in rules)
 
+
 # Elements of the (boxes, surfaces, points) product one chunk of the point-in-box test
 # may hold: 2**27 float32 values are 512 MB.
 _POINTS_IN_BOXES_CHUNK_ELEMENTS = 1 << 27
