@@ -226,15 +226,15 @@ with the eager PyTorch proxy on the training GPU.
 A tuning config inherits a training config, pins the per-trial budget, and
 adds a `tuning` block:
 
-```yaml title="configs/tasks/segmentation3d/litept/tune_voxel012_122m_t4dataset_j6gen2.yaml"
+```yaml title="configs/tasks/segmentation3d/litept/t4dataset/tune_voxel012_tiny_12e_t4dataset_122m_j6gen2_semaseg.yaml"
 trainer:
   max_epochs: 12
 callbacks:
   early_stopping: null
 
 tuning:
-  study_name: litept_seg3d_voxel012_122m_t4dataset_j6gen2
-  storage: sqlite:///mlruns/optuna/litept_seg3d_voxel012_122m_t4dataset_j6gen2.db
+  study_name: litept_seg3d_voxel012_tiny_12e_t4dataset_122m_j6gen2
+  storage: sqlite:///mlruns/optuna/litept_seg3d_voxel012_tiny_12e_t4dataset_122m_j6gen2.db
   max_trained_trials: 80
   sampler:
     _target_: optuna.samplers.TPESampler
@@ -262,7 +262,7 @@ tuning:
   reference_trials:
     litept_tiny: { grid_size: 0.12, width_preset: tiny, ... }
   reference_models:
-    ptv3_tiny: { config_name: segmentation3d/ptv3/voxel012_122m_t4dataset_j6gen2, overrides: [] }
+    ptv3_tiny: { config_name: segmentation3d/ptv3/t4dataset/voxel012_tiny_b16_50e_t4dataset_122m_j6gen2_semaseg, overrides: [] }
 ```
 
 | Key                                | Meaning                                                                                                                                                                                                                                                                                                                                          |

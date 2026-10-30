@@ -110,10 +110,11 @@ def test_estimate_matches_the_real_encoder(name: str, attn_depth: str) -> None:
 
 def test_encoder_input_width_matches_the_shipped_config() -> None:
     # The estimate's input width must follow the width the task configs pass
-    # to the encoder, which is the sweep-split voxel feature encoder's output.
-    from autoware_ml.models.segmentation3d.encoders.voxel import SweepSplitVoxelFeatureEncoder
+    # to the encoder, which is the mean voxel feature encoder's output since
+    # single-frame four-channel voxels became the PTv3 default.
+    from autoware_ml.models.segmentation3d.encoders.voxel import MeanVoxelFeatureEncoder
 
-    assert presets.ENCODER_INPUT_CHANNELS == SweepSplitVoxelFeatureEncoder.out_channels
+    assert presets.ENCODER_INPUT_CHANNELS == MeanVoxelFeatureEncoder.out_channels
 
 
 @pytest.mark.parametrize("conv_depth", sorted(CONV_DEPTH_PRESETS))

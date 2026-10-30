@@ -9,7 +9,7 @@ from autoware_ml.tuning.search_space import LitePTSearchSpace
 from autoware_ml.tuning.study import load_constraints, load_objectives
 from autoware_ml.utils.runtime import compose_config
 
-TUNE_CONFIG = "segmentation3d/litept/tune_voxel012_122m_t4dataset_j6gen2"
+TUNE_CONFIG = "segmentation3d/litept/t4dataset/tune_voxel012_tiny_12e_t4dataset_122m_j6gen2_semaseg"
 
 
 def test_tuning_config_fixes_the_budget_and_disables_early_stopping() -> None:
@@ -20,11 +20,13 @@ def test_tuning_config_fixes_the_budget_and_disables_early_stopping() -> None:
     assert cfg.logger is not None
     # The debris-recall objective is a per-class validation metric, which the
     # dataset config only breaks out at test unless widened here.
-    assert list(cfg.t4dataset.segmentation3d.detail_stages) == ["val", "test"]
-    iou_component = cfg.t4dataset.segmentation3d.confusion_components[0]
+    assert list(cfg.metric_params.segmentation3d.detail_stages) == ["val", "test"]
+    iou_component = cfg.metric_params.segmentation3d.components.confusion_components[1]
     assert list(iou_component.detail_stages) == ["val", "test"]
-    base = compose_config("segmentation3d/litept/voxel012_122m_t4dataset_j6gen2")
-    assert list(base.t4dataset.segmentation3d.detail_stages) == ["test"]
+    base = compose_config(
+        "segmentation3d/litept/t4dataset/voxel012_tiny_b16_50e_t4dataset_122m_j6gen2_semaseg"
+    )
+    assert list(base.metric_params.segmentation3d.detail_stages) == ["test"]
 
 
 def test_tuning_block_instantiates_and_references_lie_in_the_space() -> None:

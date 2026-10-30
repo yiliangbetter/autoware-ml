@@ -103,6 +103,8 @@ from autoware_ml.tuning.terminator import StudyTerminator, study_terminated
 from autoware_ml.utils.mlflow_helpers import (
     AUTOWARE_ML_HYDRA_RUN_DIR_ENV,
     AUTOWARE_ML_RUN_ID_ENV,
+    generate_experiment_name,
+    generate_run_name,
     prepare_run_context,
     resolve_tracking_uri,
 )
@@ -507,11 +509,16 @@ def prepare_launch(
     """Prepare the training run of an asked or screened trial."""
     study = context.study
     reference = trial.user_attrs.get(ATTR_REFERENCE)
+    experiment_name = generate_experiment_name(
+        str(context.cfg.experiment_group_name), str(context.cfg.experiment_name)
+    )
     run_context = prepare_run_context(
         context.tracking_uri,
         context.config_name,
         hydra_dir=None,
         stage="train",
+        experiment_name=experiment_name,
+        run_name=generate_run_name("train", experiment_name, f"trial{trial.number:04d}"),
         extra_tags={
             "optuna_study": study.study_name,
             "optuna_trial": str(trial.number),

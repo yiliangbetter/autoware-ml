@@ -44,7 +44,7 @@ ROPE_MIN_HEAD_DIM = 6
 # keep this module torch-free; test_estimate_matches_the_real_encoder compares
 # the estimate against the real encoder built at this width and fails if the
 # two drift apart.
-ENCODER_INPUT_CHANNELS = 11
+ENCODER_INPUT_CHANNELS = 4
 
 LINEAR_STEM = "linear"
 CONV_STEM = "conv"

@@ -47,7 +47,7 @@ def test_ml_package_params_follow_the_trial_config() -> None:
     parsed = yaml.safe_load(render_ml_package_params(cfg))["/**"]["ros__parameters"]
     encoder = parsed["encoder"]
     assert encoder["voxel_size"] == [0.16, 0.16, 0.16]
-    assert encoder["point_cloud_range"] == [-122.88, -122.88, -3.0, 122.88, 122.88, 5.0]
+    assert encoder["point_cloud_range"] == list(cfg.point_cloud_range)
     assert encoder["serialization_orders"] == ["z", "z-trans"]
     assert encoder["pooling_strides"] == [2, 2, 2, 2]
     assert encoder["enc_channels"] == [36, 72, 144, 216, 432]
@@ -56,7 +56,7 @@ def test_ml_package_params_follow_the_trial_config() -> None:
     assert head["dec_patch_size"] == [256, 256, 256, 256]
     # The taxonomy is the database's since #143, so mirror it rather than pin a count;
     # debris is asserted by name because the study constrains its recall.
-    taxonomy = list(OmegaConf.select(cfg, "t4dataset.segmentation3d.class_names"))
+    taxonomy = list(OmegaConf.select(cfg, "database.taxonomy.segmentation3d.class_names"))
     assert head["class_names"] == taxonomy
     assert "debris" in head["class_names"]
     assert len(head["palette"]) == 3 * len(taxonomy)
@@ -110,7 +110,7 @@ def test_legacy_feat4_spec_takes_four_features_and_keeps_the_rest() -> None:
     spec = ExportSpec(
         module=Inner(),
         args=(voxels, torch.ones(6), torch.zeros(6, 3, dtype=torch.int32), torch.zeros(1, 6)),
-        input_param_names=[
+        input_names=[
             "voxels",
             "num_points_per_voxel",
             "grid_coord",
@@ -120,7 +120,7 @@ def test_legacy_feat4_spec_takes_four_features_and_keeps_the_rest() -> None:
         dynamic_axes={"voxels": {0: "num_voxels"}, "grid_coord": {0: "num_voxels"}},
     )
     legacy = legacy_feat4_encoder_spec(spec, torch.device("cpu"))
-    assert legacy.input_param_names == ["grid_coord", "feat", "serialized_pooling_0_indices"]
+    assert legacy.input_names == ["grid_coord", "feat", "serialized_pooling_0_indices"]
     assert legacy.args[1].shape == (6, 4)
     assert torch.equal(legacy.args[1], voxels[:, 0, :4])
     assert legacy.dynamic_axes == {"grid_coord": {0: "num_voxels"}, "feat": {0: "num_voxels"}}
@@ -208,7 +208,7 @@ def test_legacy_feat4_spec_pads_a_convolution_stem_to_an_aligned_width() -> None
     spec = ExportSpec(
         module=Inner(),
         args=(voxels, torch.ones(5), torch.zeros(5, 3, dtype=torch.int32)),
-        input_param_names=["voxels", "num_points_per_voxel", "grid_coord"],
+        input_names=["voxels", "num_points_per_voxel", "grid_coord"],
         output_names=["point_feat_0"],
         dynamic_axes={"voxels": {0: "num_voxels"}, "grid_coord": {0: "num_voxels"}},
     )

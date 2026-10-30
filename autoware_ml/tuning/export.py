@@ -239,7 +239,7 @@ def legacy_feat4_encoder_spec(spec: Any, device: Any) -> Any:
 
     from autoware_ml.utils.deploy import ExportSpec
 
-    names = list(spec.input_param_names)
+    names = list(spec.input_names)
     if names[:3] != ["voxels", "num_points_per_voxel", "grid_coord"]:
         raise ValueError(f"Unexpected encoder inputs for the legacy contract: {names[:3]}")
     voxels, _num_points, grid_coord, *rest = spec.args
@@ -290,7 +290,7 @@ def legacy_feat4_encoder_spec(spec: Any, device: Any) -> Any:
     return ExportSpec(
         module=module,
         args=(grid_coord, feat, *rest),
-        input_param_names=["grid_coord", LEGACY_FEATURE_INPUT, *names[3:]],
+        input_names=["grid_coord", LEGACY_FEATURE_INPUT, *names[3:]],
         output_names=spec.output_names,
         dynamic_axes=axes,
         supported_stages=spec.supported_stages,
@@ -382,7 +382,7 @@ def export_package(
             spec.module,
             spec.args,
             module_cfg,
-            spec.input_param_names,
+            spec.input_names,
             spec.output_names,
             spec.dynamic_axes,
             final_path,

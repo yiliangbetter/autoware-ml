@@ -1,6 +1,6 @@
 # @package _global_
 defaults:
-  - /tasks/segmentation3d/litept/voxel012_122m_t4dataset_j6gen2
+  - /tasks/segmentation3d/litept/t4dataset/voxel012_tiny_b16_50e_t4dataset_122m_j6gen2_semaseg
   - _self_
 
 # Every trial trains the same fixed budget so the study compares
@@ -11,16 +11,20 @@ trainer:
 
 callbacks:
   early_stopping: null
+  # The shipped recipe validates every fifth epoch until the last ten; a
+  # trial keeps its best-validation checkpoint, so it validates every epoch.
+  dynamic_validation:
+    epoch_intervals: [[0, 1]]
 
 # The study reads per-class debris recall at validation, which the metric
 # suites only break out at test by default.
-t4dataset:
+metric_params:
   segmentation3d:
     detail_stages: [val, test]
 
 tuning:
-  study_name: litept_seg3d_voxel012_122m_t4dataset_j6gen2
-  storage: sqlite:///mlruns/optuna/litept_seg3d_voxel012_122m_t4dataset_j6gen2.db
+  study_name: litept_seg3d_voxel012_tiny_12e_t4dataset_122m_j6gen2
+  storage: sqlite:///mlruns/optuna/litept_seg3d_voxel012_tiny_12e_t4dataset_122m_j6gen2.db
   # Trainings the study pays for; screened-out and imported trials are free.
   max_trained_trials: 80
   # Trained trials are measured later, so the sampler must not re-propose a
