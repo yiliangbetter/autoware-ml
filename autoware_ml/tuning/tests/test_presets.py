@@ -98,6 +98,7 @@ def test_estimate_matches_the_real_encoder(name: str, attn_depth: str) -> None:
     preset = WIDTH_PRESETS[name]
     depths = encoder_depths("2-2-2", attn_depth)
     encoder = LitePTEncoder(
+        in_channels=presets.ENCODER_INPUT_CHANNELS,
         enc_channels=preset.enc_channels,
         enc_num_head=preset.enc_num_head,
         enc_depths=depths,
@@ -111,6 +112,7 @@ def test_estimate_matches_the_conv_stem(conv_depth: str) -> None:
     preset = WIDTH_PRESETS["small"]
     depths = encoder_depths(conv_depth, "2-2")
     encoder = LitePTEncoder(
+        in_channels=presets.ENCODER_INPUT_CHANNELS,
         enc_channels=preset.enc_channels,
         enc_num_head=preset.enc_num_head,
         enc_depths=depths,

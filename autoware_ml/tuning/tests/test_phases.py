@@ -66,7 +66,7 @@ from autoware_ml.utils.mlflow_helpers import (
 )
 from autoware_ml.utils.runtime import ConfigReference
 
-CONFIG_NAME = "segmentation3d/litept/tune_voxel012_122m_t4dataset_j6gen2"
+CONFIG_NAME = "segmentation3d/litept/t4dataset/tune_voxel012_tiny_12e_t4dataset_122m_j6gen2_semaseg"
 
 
 @pytest.fixture
@@ -75,6 +75,8 @@ def context(tmp_path: Path, monkeypatch) -> TuningContext:
     cfg = OmegaConf.create(
         {
             "logger": {"tracking_uri": f"sqlite:///{tmp_path / 'mlflow.db'}"},
+            "experiment_group_name": "litept_tune_tests",
+            "experiment_name": "phases",
             "tuning": {
                 "study_name": "unit",
                 "storage": f"sqlite:///{tmp_path / 'optuna.db'}",
@@ -361,6 +363,8 @@ def bench_context(tmp_path: Path, monkeypatch) -> TuningContext:
     cfg = OmegaConf.create(
         {
             "logger": {"tracking_uri": f"sqlite:///{tmp_path / 'mlflow.db'}"},
+            "experiment_group_name": "litept_tune_tests",
+            "experiment_name": "phases",
             "tuning": {
                 "study_name": "bench",
                 "storage": f"sqlite:///{tmp_path / 'optuna.db'}",

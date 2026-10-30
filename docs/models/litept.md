@@ -71,7 +71,7 @@ autoware-ml train --config-name segmentation3d/litept/t4dataset/voxel012_tiny_b1
 
 ## Hyperparameter tuning
 
-`segmentation3d/litept/tune_voxel012_122m_t4dataset_j6gen2` defines a
+`segmentation3d/litept/t4dataset/tune_voxel012_tiny_12e_t4dataset_122m_j6gen2_semaseg` defines a
 batched Optuna study over the LitePT architecture, driven by the `tune`
 commands described in
 [Optuna](../user-guide/optuna.md#batched-tuning-with-a-bench-in-the-loop).
@@ -141,12 +141,12 @@ feasible trials and stops once that bound falls under 0.004 mIoU, two
 standard deviations of the replicate noise.
 
 ```bash
-autoware-ml tune init --config-name segmentation3d/litept/tune_voxel012_122m_t4dataset_j6gen2
-autoware-ml tune import --config-name segmentation3d/litept/tune_voxel012_122m_t4dataset_j6gen2 --from-storage sqlite:///mlruns/litept_tune/optuna.db --from-study litept_seg3d_j6gen2_v1
-autoware-ml tune screen --config-name segmentation3d/litept/tune_voxel012_122m_t4dataset_j6gen2
-autoware-ml tune train --config-name segmentation3d/litept/tune_voxel012_122m_t4dataset_j6gen2 --n-trials 1
-autoware-ml tune measure --config-name segmentation3d/litept/tune_voxel012_122m_t4dataset_j6gen2
-autoware-ml tune status --config-name segmentation3d/litept/tune_voxel012_122m_t4dataset_j6gen2
+autoware-ml tune init --config-name segmentation3d/litept/t4dataset/tune_voxel012_tiny_12e_t4dataset_122m_j6gen2_semaseg
+autoware-ml tune import --config-name segmentation3d/litept/t4dataset/tune_voxel012_tiny_12e_t4dataset_122m_j6gen2_semaseg --from-storage sqlite:///mlruns/litept_tune/optuna.db --from-study litept_seg3d_j6gen2_v1
+autoware-ml tune screen --config-name segmentation3d/litept/t4dataset/tune_voxel012_tiny_12e_t4dataset_122m_j6gen2_semaseg
+autoware-ml tune train --config-name segmentation3d/litept/t4dataset/tune_voxel012_tiny_12e_t4dataset_122m_j6gen2_semaseg --n-trials 1
+autoware-ml tune measure --config-name segmentation3d/litept/t4dataset/tune_voxel012_tiny_12e_t4dataset_122m_j6gen2_semaseg
+autoware-ml tune status --config-name segmentation3d/litept/t4dataset/tune_voxel012_tiny_12e_t4dataset_122m_j6gen2_semaseg
 ```
 
 ## Export contract

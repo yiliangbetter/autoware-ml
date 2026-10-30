@@ -29,7 +29,7 @@ from autoware_ml.tuning.search_space import (
 )
 from autoware_ml.utils.runtime import compose_config
 
-TUNE_CONFIG = "segmentation3d/litept/tune_voxel012_122m_t4dataset_j6gen2"
+TUNE_CONFIG = "segmentation3d/litept/t4dataset/tune_voxel012_tiny_12e_t4dataset_122m_j6gen2_semaseg"
 
 TINY = {
     "grid_size": 0.12,

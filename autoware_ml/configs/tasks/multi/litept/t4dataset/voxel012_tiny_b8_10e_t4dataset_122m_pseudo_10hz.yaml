@@ -1,0 +1,11 @@
+# @package _global_
+# Stage 3, joint training on the 10 Hz pseudo labelled corpus with the joint ground truth,
+# LitePT encoder and head on the PTv3 recipe.
+defaults:
+  - /tasks/multi/ptv3/t4dataset/voxel012_tiny_b8_10e_t4dataset_122m_pseudo_10hz
+  - /tasks/segmentation3d/litept/encoder_tiny
+  - /tasks/segmentation3d/litept/seg3d_head_tiny
+  - _self_
+
+experiment_group_name: litept_det3d_seg3d/${database.version}/pseudo_10hz
+experiment_name: voxel012_tiny_b8_10e_t4dataset_122m_pseudo_10hz

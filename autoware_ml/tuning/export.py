@@ -243,7 +243,7 @@ def export_package(
             spec.module,
             spec.args,
             module_cfg,
-            spec.input_param_names,
+            spec.input_names,
             spec.output_names,
             spec.dynamic_axes,
             final_path,

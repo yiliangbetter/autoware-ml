@@ -310,7 +310,7 @@ autoware-ml tune status --config-name <tuning_config> [hydra_overrides...]
 
 **Arguments:**
 
-- `--config-name`: A config with a `tuning` block, such as `segmentation3d/litept/tune_voxel012_122m_t4dataset_j6gen2`
+- `--config-name`: A config with a `tuning` block, such as `segmentation3d/litept/t4dataset/tune_voxel012_tiny_12e_t4dataset_122m_j6gen2_semaseg`
 - `--from-storage`, `--from-study` (`import`): The source study's Optuna storage URL and name
 - `--n-trials` (`screen`): Measure at most this many trials in this call
 - `--queue-target` (`screen`): Screened trials to keep waiting for training, overriding the config's policy
@@ -326,7 +326,7 @@ Hydra overrides apply to every trial of the invocation, after the trial's own
 overrides, so a smoke test can shorten every training:
 
 ```bash
-autoware-ml tune train --config-name segmentation3d/litept/tune_voxel012_122m_t4dataset_j6gen2 \
+autoware-ml tune train --config-name segmentation3d/litept/t4dataset/tune_voxel012_tiny_12e_t4dataset_122m_j6gen2_semaseg \
     --n-trials 1 trainer.max_epochs=1 +trainer.limit_train_batches=2 +trainer.limit_val_batches=2
 ```
 

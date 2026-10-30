@@ -47,7 +47,7 @@ def test_ml_package_params_follow_the_trial_config() -> None:
     parsed = yaml.safe_load(render_ml_package_params(cfg))["/**"]["ros__parameters"]
     encoder = parsed["encoder"]
     assert encoder["voxel_size"] == [0.16, 0.16, 0.16]
-    assert encoder["point_cloud_range"] == [-122.88, -122.88, -3.0, 122.88, 122.88, 5.0]
+    assert encoder["point_cloud_range"] == list(cfg.point_cloud_range)
     assert encoder["serialization_orders"] == ["z", "z-trans"]
     assert encoder["pooling_strides"] == [2, 2, 2, 2]
     assert encoder["enc_channels"] == [36, 72, 144, 216, 432]
@@ -56,7 +56,7 @@ def test_ml_package_params_follow_the_trial_config() -> None:
     assert head["dec_patch_size"] == [256, 256, 256, 256]
     # The taxonomy is the database's since #143, so mirror it rather than pin a count;
     # debris is asserted by name because the study constrains its recall.
-    taxonomy = list(OmegaConf.select(cfg, "t4dataset.segmentation3d.class_names"))
+    taxonomy = list(OmegaConf.select(cfg, "database.taxonomy.segmentation3d.class_names"))
     assert head["class_names"] == taxonomy
     assert "debris" in head["class_names"]
     assert len(head["palette"]) == 3 * len(taxonomy)
