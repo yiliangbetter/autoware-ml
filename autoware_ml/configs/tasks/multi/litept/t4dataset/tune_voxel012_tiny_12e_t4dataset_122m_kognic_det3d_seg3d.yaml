@@ -1,0 +1,198 @@
+# @package _global_
+# LitePT architecture study, run 5: the trade-off between deployed latency, segmentation mIoU
+# and detection mAP on the Kognic pre-delivery J6 gen2 corpus (boxes and masks on the same
+# frames), with every proposal timed on the sensing bench before it trains.
+#
+# Baseline: the shipped LitePT-tiny setting (tiny / 0.12 m / 2-2-2 / 2-2 / light / 512 / 4 /
+# linear) enters as the reference trial, and the search space only contains cells at or above it:
+# wider ladders, deeper convolution and attention, deeper decoders, larger patches. The grid is
+# fixed at 0.12 m and the stem at linear, as decided for this run.
+defaults:
+  - /tasks/multi/ptv3/t4dataset/base_voxel012_122m
+  - /tasks/segmentation3d/litept/encoder_tiny
+  - /tasks/segmentation3d/litept/seg3d_head_tiny
+  - /database@database: t4dataset/t4dataset_j6gen2_segdet3d_kognic
+  - _self_
+
+batch_size: 8
+num_workers: 8
+experiment_group_name: litept_det3d_seg3d/${database.version}/kognic_tune
+experiment_name: tune_voxel012_tiny_12e_t4dataset_122m_kognic_det3d_seg3d
+
+# Every trial trains the same fixed budget from scratch so the study compares architectures
+# rather than schedules; early stopping is off for the same reason. 12 epochs over the 219
+# training scenarios (4,415 labelled frames), as in the segmentation-only studies: one epoch
+# takes about 27 min on a free card (two trainings sharing the host), so 20 epochs would have
+# cost 9 h per trial and 12 days for the budget. Three PTv3-tiny references trained for 20
+# epochs on 2026-11-05 reached mIoU 0.600-0.612 and mAP 0.385-0.412 at their best-loss epoch;
+# their 12-epoch replicates set this study's bounds. Batch 8 with two accumulated batches on
+# one GPU per trial.
+trainer:
+  max_epochs: 12
+  accumulate_grad_batches: 2
+
+model:
+  # The 100-epoch recipe warms up for 12 epochs and decays for 88; two warm-up epochs (552
+  # optimizer steps) are kept so the from-scratch detection head does not see the peak rate
+  # at once, then the cosine decay over the remaining ten.
+  scheduler:
+    warmup_epochs: 2
+    decay_epochs: 10
+
+callbacks:
+  early_stopping: null
+  # A trial keeps its best-validation-loss checkpoint, so it validates every epoch.
+  dynamic_validation:
+    epoch_intervals: [[0, 1]]
+
+# The study reads per-class debris recall at validation, which the metric suites only break
+# out at test by default.
+metric_params:
+  segmentation3d:
+    detail_stages: [val, test]
+
+tuning:
+  study_name: litept_det3d_seg3d_voxel012_12e_kognic_run5
+  storage: sqlite:///mlruns/optuna/litept_det3d_seg3d_voxel012_12e_kognic_run5.db
+  # Trainings the study pays for; screened-out and imported trials are free.
+  max_trained_trials: 60
+  # Multi-objective TPE. Trained trials are measured later, so the sampler must not re-propose
+  # a configuration that is still in flight: constant_liar treats running trials as poor until
+  # they report. No seed, see the run-3 config.
+  sampler:
+    _target_: optuna.samplers.TPESampler
+    multivariate: true
+    constant_liar: true
+    n_startup_trials: 10
+  search_space:
+    _target_: autoware_ml.tuning.search_space.LitePTSearchSpace
+    # Fixed for this run: the deployed grid and the linear stem (the conv stem exported poorly
+    # and showed no accuracy advantage in runs 3 and 4).
+    grid_sizes: [0.12]
+    stem_types: [linear]
+    # At or above the baseline. medium, small and micro are narrower than tiny at the attention
+    # stages and their 18- and 12-channel heads do not build on the node at patch 512 and above.
+    width_presets: [tiny, large, xlarge]
+    conv_depth_presets: [2-2-2, 3-3-3]
+    attn_depth_presets: [2-2, 4-2, 6-2]
+    # At least one block in the last decoder stage: light is the baseline, full and double are
+    # deeper.
+    dec_depth_presets: [light, full, double]
+    patch_sizes: [512, 1024, 2048]
+    mlp_ratios: [2, 3, 4]
+    # The rotary base stays at the config default (mIoU flat over 10..1000 in the ablation).
+    rope_base_range: null
+    conv_stem_kernel_size: 3
+  # Three objectives: the study maps the trade-off surface. Latency is the deployed one measured
+  # on the bench; mIoU and mAP are validation metrics at the best-validation-loss epoch.
+  objectives:
+    - { source: latency, name: latency_ms, direction: minimize }
+    - { name: val/seg3d/mIoU, direction: maximize }
+    - { name: val/det3d/mAP, direction: maximize }
+  # Bounds the sampler is told about. A trial outside them keeps its values, so nothing measured
+  # is discarded, but it never counts as Pareto-optimal.
+  # - Latency: no slower than PTv3-tiny, the reference model below, exported with its initial
+  #   weights and timed by the same harness in the same session (run 4 measured it at 23.85 ms).
+  # - Debris recall: run 4's rule is 0.95 x PTv3-tiny's recall under the same recipe. PTv3-tiny
+  #   has not trained under this recipe yet, so the bound is a placeholder until it has; it
+  #   stays in the list so the sampler's constraint vector keeps its shape.
+  constraints:
+    - { source: latency, name: latency_ms, reference: ptv3_tiny, margin_ms: 0.0 }
+    - { metric: val/seg3d/recall_debris, min: 0.0705 }
+  # Architectures outside the search space whose bench latency the study needs: PTv3-tiny
+  # under the same recipe, never trained by the study, exported and timed like a trial.
+  reference_models:
+    ptv3_tiny:
+      config_name: multi/ptv3/t4dataset/ref_voxel012_tiny_12e_t4dataset_122m_kognic_det3d_seg3d
+      overrides: []
+  static_filter:
+    max_encoder_params: null
+  # The eager PyTorch proxy on the training GPU, recorded for comparison with the bench only.
+  latency:
+    proxy: true
+    frames: 50
+    warmup: 10
+    repeats: 5
+    precision: fp32
+  # Deployed latency, measured on the bench before a trial trains. The package carries the
+  # model's initial weights. The encoder and the segmentation head are timed, as in runs 3 and
+  # 4, so the bound and the earlier measurements stay comparable; the detection head's cost is
+  # timed separately for the finalists.
+  bench:
+    enabled: true
+    host: sensing-bench.local
+    user: yiliang-liu
+    ssh_key: ~/.ssh/litept_bench
+    ssh_options: []
+    # A directory both machines mount: packages go in, results come back. The run-3 directory
+    # belongs to another uid on this host, so run 5 has its own.
+    exchange:
+      local: /mnt/fdd_nas/litept_tuning_run5/bench
+      remote: /mnt/fdd_nas/litept_tuning_run5/bench
+    # The bench account's own state and venv directories (the shared /var/tmp/bench-state and
+    # bench-venv belong to another user and are not writable by yiliang-liu).
+    harness:
+      repo: /mnt/fdd_nas/Benchmarks/yiliang/ptv3-inference-benchmarks
+      state_dir: /var/tmp/bench-state-yiliang
+      command: export PATH=$HOME/.local/bin:$PATH UV_PROJECT_ENVIRONMENT=/var/tmp/bench-venv-yiliang BENCH_STATE_DIR=/var/tmp/bench-state-yiliang && uv sync --frozen -q && uv run --frozen
+      python: python3
+    variant:
+      prefix: lt5
+      firmware: oss-universe-devel-cuda-20260902
+      adapter: v13  # harness adapter for the #13300/#13390/#13400 node API (added 2026-11-09)
+      sources:
+        # Head of autowarefoundation/autoware_universe#13400 ("pad the attention order outside the
+        # engines"): the node that feeds the patch_order inputs this repository's encoders declare
+        # since 5f6d53c (#123). Closed unmerged upstream, landed downstream in
+        # tier4/pilot_auto_sensing_perception#48; the commit stays fetchable from upstream.
+        autoware_universe: autowarefoundation/autoware_universe@805dc8f7e4a131804244d1c51e54e6ae49285c7e
+        autoware_core: autowarefoundation/autoware_core@85e3732770dda1dacfe2c68fe304a4cc509fb987
+      mcap: assets/mcaps/sample_pointcloud.mcap
+      # Node parameters travel inside the package (node_param_template below): the PR-head config
+      # already maps the Kognic classes, the older universe configs do not.
+      node_param: ptv3.param.yaml
+      params: [ml_package_ptv3.param.yaml]
+      vars: { model_variant: ptv3, use_seg3d_head: "true", use_det3d_head: "false" }
+      warmup: 10
+      iterations: 50
+    node_param_template: /awml_env/tune5_ptv3.param.yaml  # awml_env is mounted read-only in the container
+    # The encoders of this repository take precomputed patch_order inputs (5f6d53c), which no
+    # legacy_feat4 node offers; the #13400 node above takes the main contract (voxel feature
+    # encoder inside the graph). Run-5 latencies are therefore comparable within run 5 (the
+    # PTv3-tiny reference is timed under the same contract), not to runs 3 and 4.
+    export_contract: main
+    replicates: 7
+    metric: gpu_total_ms
+    statistic: replicate_median_mean
+    max_ci95_ms: 0.3
+    unbuildable_violation_ms: 100.0
+    reference: litept_tiny
+    # The bench belongs to someone else during the day.
+    window: { start: "18:00", end: 09:00, timezone: Asia/Tokyo }
+    # Raised from 3/10 on 2026-11-11 when 15 Getworks GPU slots joined the two local ones.
+    queue: { target: 12, target_before_close: 16, close_buffer_hours: 2.5 }
+    job: { timeout_s: 3600, max_attempts: 3, keep_variants: false, keep_packages: true }
+  # No terminator: Optuna's applies to one objective only. The study runs to its budget.
+  terminator:
+    enabled: false
+  measure:
+    max_attempts: 3
+  train_overrides: []
+  # A trial that runs out of GPU memory at batch 8 (the TransFusion head's fp32 cross attention
+  # over the 256 x 256 BEV map costs about 1 GB per sample) trains once more at batch 4 with
+  # four accumulated batches: the same clouds per optimizer step keep the schedule.
+  oom_retry:
+    overrides: [batch_size=4, trainer.accumulate_grad_batches=4]
+    max_retries: 1
+  # The shipped LitePT-tiny setting: the baseline every proposal is compared with, and the
+  # reference the bench measures first.
+  reference_trials:
+    litept_tiny:
+      grid_size: 0.12
+      width_preset: tiny
+      conv_depth_preset: 2-2-2
+      attn_depth_preset: 2-2
+      dec_depth_preset: light
+      patch_size: 512
+      mlp_ratio: 4
+      stem_type: linear

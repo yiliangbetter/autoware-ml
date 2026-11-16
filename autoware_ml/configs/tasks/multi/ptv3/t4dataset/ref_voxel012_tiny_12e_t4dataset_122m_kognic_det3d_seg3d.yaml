@@ -1,0 +1,32 @@
+# @package _global_
+# PTv3-tiny under the run-5 trial recipe: the reference model of the LitePT study
+# tune_voxel012_tiny_12e_t4dataset_122m_kognic_det3d_seg3d (12 epochs, see there). Its bench latency anchors the
+# study's latency bound, and three replicates of this training set the debris-recall bound
+# (0.95 x their mean) and the accuracy PTv3-tiny reaches under the same budget.
+defaults:
+  - base_voxel012_122m
+  - /database@database: t4dataset/t4dataset_j6gen2_segdet3d_kognic
+  - _self_
+
+batch_size: 8
+num_workers: 8
+experiment_group_name: ptv3_det3d_seg3d/${database.version}/kognic_tune
+experiment_name: ref_voxel012_tiny_12e_t4dataset_122m_kognic_det3d_seg3d
+
+trainer:
+  max_epochs: 12
+  accumulate_grad_batches: 2
+
+model:
+  scheduler:
+    warmup_epochs: 2
+    decay_epochs: 10
+
+callbacks:
+  early_stopping: null
+  dynamic_validation:
+    epoch_intervals: [[0, 1]]
+
+metric_params:
+  segmentation3d:
+    detail_stages: [val, test]
