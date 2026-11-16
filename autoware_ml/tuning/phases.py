@@ -123,6 +123,10 @@ TASK_CONFIG_PREFIX = "tasks"
 # Per-trial attributes of the out-of-memory retry.
 ATTR_RETRY_OVERRIDES = "retry_overrides"
 ATTR_OOM_RETRIES = "oom_retries"
+# Pid of the train phase that launched a screened trial's training. Lets several train
+# phases (one per GPU) share a study: a trial claimed by a live process is not launched
+# twice, and a claim left by a dead process is ignored.
+ATTR_TRAINING_PID = "training_pid"
 OOM_MARKERS = ("CUDA out of memory", "OutOfMemoryError", "CUDA error: out of memory")
 # The trainer and the screen phase share one GPU: the screen phase exports a
 # package only while no training runs, and the trainer does not launch one
@@ -163,25 +167,15 @@ def study_dir(context: "TuningContext") -> Path:
     return context.log_dir.parent
 
 
-def mark_training_active(context: "TuningContext") -> None:
-    """Record that this process runs a training on the GPU."""
-    path = study_dir(context) / ACTIVE_FILE_NAME
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(str(os.getpid()))
+ALL_GPUS_MARKER = "all"
 
 
-def clear_training_active(context: "TuningContext") -> None:
-    """Forget the training this process ran."""
-    (study_dir(context) / ACTIVE_FILE_NAME).unlink(missing_ok=True)
+def _active_marker(context: "TuningContext", gpu: str | None) -> Path:
+    """Marker file of a training on ``gpu`` (``None``: on whatever devices are visible)."""
+    return study_dir(context) / f"{ACTIVE_FILE_NAME}.{gpu if gpu is not None else ALL_GPUS_MARKER}"
 
 
-def training_active(context: "TuningContext") -> bool:
-    """Whether a live trainer process holds the GPU, judged by its recorded pid."""
-    path = study_dir(context) / ACTIVE_FILE_NAME
-    try:
-        pid = int(path.read_text().strip())
-    except (OSError, ValueError):
-        return False
+def _pid_alive(pid: int) -> bool:
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
@@ -189,6 +183,75 @@ def training_active(context: "TuningContext") -> bool:
     except PermissionError:
         return True
     return True
+
+
+def mark_training_active(context: "TuningContext", gpu: str | None = None) -> None:
+    """Record that this process runs a training on ``gpu``.
+
+    One train phase per GPU can run at a time (see ATTR_TRAINING_PID), so the
+    markers are kept per device: the screen phase exports on a device no live
+    trainer holds instead of waiting for every training to end.
+    """
+    path = _active_marker(context, gpu)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(str(os.getpid()))
+
+
+def clear_training_active(context: "TuningContext") -> None:
+    """Forget the trainings this process ran."""
+    for path in [*study_dir(context).glob(f"{ACTIVE_FILE_NAME}.*"), study_dir(context) / ACTIVE_FILE_NAME]:
+        try:
+            if path.read_text().strip() == str(os.getpid()):
+                path.unlink(missing_ok=True)
+        except OSError:
+            continue
+
+
+def active_trainings(context: "TuningContext") -> dict[str, int]:
+    """Live trainer processes by the device they hold (``"all"`` for an unpinned one)."""
+    active: dict[str, int] = {}
+    legacy = study_dir(context) / ACTIVE_FILE_NAME
+    candidates = [(ALL_GPUS_MARKER, legacy)] + [
+        (path.name[len(ACTIVE_FILE_NAME) + 1 :], path)
+        for path in study_dir(context).glob(f"{ACTIVE_FILE_NAME}.*")
+    ]
+    for gpu, path in candidates:
+        try:
+            pid = int(path.read_text().strip())
+        except (OSError, ValueError):
+            continue
+        if _pid_alive(pid):
+            active[gpu] = pid
+    return active
+
+
+def training_active(context: "TuningContext") -> bool:
+    """Whether a live trainer process holds a GPU, judged by its recorded pid."""
+    return bool(active_trainings(context))
+
+
+def visible_gpus() -> list[str]:
+    """Device ids this process may use: ``CUDA_VISIBLE_DEVICES`` or every device."""
+    listed = os.environ.get(CUDA_VISIBLE_DEVICES_ENV)
+    if listed is not None:
+        return [item.strip() for item in listed.split(",") if item.strip()]
+    try:
+        import torch
+
+        return [str(index) for index in range(torch.cuda.device_count())]
+    except Exception:  # noqa: BLE001 - no CUDA at all: let the caller decide
+        return []
+
+
+def free_gpu(context: "TuningContext") -> str | None:
+    """A visible device no live trainer holds, or ``None``."""
+    active = active_trainings(context)
+    if ALL_GPUS_MARKER in active:
+        return None
+    for gpu in visible_gpus():
+        if gpu not in active:
+            return gpu
+    return None
 
 
 def wait_while_paused(
@@ -221,15 +284,29 @@ def trainer_paused(context: "TuningContext", max_wait_s: float, *, poll_s: float
         time.sleep(2.0)  # a trainer that passed the pause check gets to record its launch
         started = time.monotonic()
         announced = False
-        while training_active(context):
+        while (gpu := free_gpu(context)) is None and training_active(context):
             if time.monotonic() - started >= max_wait_s:
                 raise TrainerBusyError(
                     f"a training held the GPU for more than {max_wait_s / 3600:.1f} h"
                 )
             if not announced:
-                logger.info("Waiting for the running training to finish before exporting")
+                logger.info("Waiting for a training to finish before exporting")
                 announced = True
             time.sleep(poll_s)
+        if gpu is not None and active_trainings(context):
+            # Pin the exports to the free device; the trainers on the others carry on.
+            import torch
+
+            if torch.cuda.is_initialized():
+                logger.warning(
+                    "CUDA already initialized in this process; exporting on its device while "
+                    "GPUs %s train", sorted(active_trainings(context))
+                )
+            else:
+                os.environ[CUDA_VISIBLE_DEVICES_ENV] = gpu
+                logger.info(
+                    "Exporting on GPU %s while GPUs %s train", gpu, sorted(active_trainings(context))
+                )
         yield
     finally:
         pause.unlink(missing_ok=True)
@@ -613,6 +690,7 @@ def finish_trial_launch(
 ) -> TrialOutcome:
     """Record a finished training subprocess on its trial."""
     trial = launch.trial
+    trial.set_user_attr(ATTR_TRAINING_PID, None)
     if exit_code != 0:
         retry = oom_retry_overrides(context, launch)
         if retry is not None:
@@ -677,17 +755,32 @@ def tell_known_trials(context: TuningContext) -> list[TrialOutcome]:
     return outcomes
 
 
+def claimed_by_live_trainer(trial: FrozenTrial) -> bool:
+    """Whether a live train phase has launched this trial's training (see ATTR_TRAINING_PID)."""
+    pid = trial.user_attrs.get(ATTR_TRAINING_PID)
+    if pid is None:
+        return False
+    try:
+        os.kill(int(pid), 0)
+    except (ProcessLookupError, ValueError):
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
 def trials_awaiting_training(study: optuna.Study) -> list[FrozenTrial]:
     """Screened trials without an accuracy: the ones the trainer has to run.
 
     A screened trial that already carries imported metrics only waits to be
     told once the latency bound is known; training it again would spend a
-    budget slot on a known result.
+    budget slot on a known result. A trial another live train phase has
+    launched is not waiting either.
     """
     return [
         trial
         for trial in trials_in_phase(study, PHASE_SCREENED)
-        if trial.user_attrs.get(ATTR_METRICS) is None
+        if trial.user_attrs.get(ATTR_METRICS) is None and not claimed_by_live_trainer(trial)
     ]
 
 
@@ -752,6 +845,14 @@ def run_train_phase(
     launched = 0
     asked = 0
     while True:
+        if queue is not None and not queue and slots and launched < n_trials:
+            # Trials screened since the phase started fill the free slots.
+            active = {launch.trial_number for launch, _ in running}
+            queue = deque(
+                frozen
+                for frozen in trials_awaiting_training(context.study)
+                if frozen.number not in active
+            )
         while slots and launched < n_trials and asked < ask_budget:
             gpu = slots.popleft()
             if queue is not None:
@@ -777,7 +878,8 @@ def run_train_phase(
             )
             wait_while_paused(context)
             running.append((launch, launcher(launch)))
-            mark_training_active(context)
+            launch.trial.set_user_attr(ATTR_TRAINING_PID, os.getpid())
+            mark_training_active(context, launch.gpu)
             launched += 1
         if not running:
             break
@@ -822,7 +924,6 @@ def evaluate_trial(
     import hydra
     import torch
 
-    from autoware_ml.utils.checkpoints import apply_matching_weights
     from autoware_ml.utils.runtime import configure_torch_runtime, set_seed
 
     overrides = context.trial_overrides(trial.user_attrs[ATTR_OVERRIDES], *MEASURE_OVERRIDES)
@@ -831,16 +932,17 @@ def evaluate_trial(
     set_seed(cfg)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    model = hydra.utils.instantiate(cfg.model)
-    model.set_data_preprocessing(hydra.utils.instantiate(cfg.data_preprocessing))
-    apply_matching_weights(
-        model,
-        trial.user_attrs[ATTR_CHECKPOINT],
-        map_location=device,
+    from autoware_ml.builders.model_builder import build_data_preprocessor, build_model
+
+    # main's models take their data preprocessor at construction (no set_data_preprocessing).
+    model = build_model(
+        cfg,
+        data_preprocessor=build_data_preprocessor(cfg),
         device=device,
+        weights_path=trial.user_attrs[ATTR_CHECKPOINT],
+        resume_checkpoint_path=None,
         set_eval=True,
         enforce_full_coverage=True,
-        logger=logger,
     )
 
     datamodule = hydra.utils.instantiate(cfg.datamodule)
