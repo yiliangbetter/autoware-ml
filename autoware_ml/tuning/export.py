@@ -51,6 +51,9 @@ MAIN_CONTRACT = "main"
 LEGACY_CONTRACT = "legacy_feat4"
 CONTRACTS = (MAIN_CONTRACT, LEGACY_CONTRACT)
 LEGACY_FEATURE_CHANNELS = 4
+# Point channels the node feeds the ``main``-contract encoder since autoware_universe#13300:
+# x, y, z, intensity and the sweep time lag. A model trained on single frames reads four.
+NODE_POINT_CHANNELS = 5
 LEGACY_FEATURE_INPUT = "feat"
 LEGACY_STEM_ALIGNMENT = 8
 # A fixed, distinguishable colour ladder; the node only checks the length.
@@ -135,14 +138,20 @@ def default_palette(count: int) -> list[int]:
     return flat
 
 
-def render_ml_package_params(cfg: DictConfig | Mapping[str, Any]) -> str:
+def render_ml_package_params(
+    cfg: DictConfig | Mapping[str, Any], *, max_points_per_voxel: int | None = None
+) -> str:
     """Render the node's ML-package parameter file for a composed config.
 
     The values are the ones the deploy config stamps into the ONNX metadata,
-    read from the same places, so the package and the artifact agree.
+    read from the same places, so the package and the artifact agree. The node
+    since autoware_universe#13400 also needs ``max_points_per_voxel`` (the
+    second dimension of the ``voxels`` input) and ``patch_sizes`` (one attention
+    window per level, sizing its padded ``patch_order`` buffers).
 
     Args:
         cfg: Composed training config of the trial.
+        max_points_per_voxel: Points per voxel the exported encoder takes, if known.
 
     Returns:
         YAML text.
@@ -154,9 +163,13 @@ def render_ml_package_params(cfg: DictConfig | Mapping[str, Any]) -> str:
         dec_patch_size = OmegaConf.to_container(
             OmegaConf.select(cfg, "model.seg3d_head.dec_patch_size"), resolve=True
         )
+        enc_patch_size = OmegaConf.to_container(
+            OmegaConf.select(cfg, "model.encoder.enc_patch_size"), resolve=True
+        )
     else:
         modules = cfg["deploy"]["onnx"]["modules"]
         dec_patch_size = cfg["model"]["seg3d_head"].get("dec_patch_size")
+        enc_patch_size = cfg["model"]["encoder"].get("enc_patch_size")
     assert isinstance(modules, Mapping)
     encoder_meta = modules[ENCODER_MODULE]["metainfo"]
     head_meta = modules[SEG_HEAD_MODULE]["metainfo"]
@@ -164,6 +177,12 @@ def render_ml_package_params(cfg: DictConfig | Mapping[str, Any]) -> str:
     class_names = [str(name) for name in head_meta["class_names"]]
     if dec_patch_size is None:
         dec_patch_size = [512] * len(head_meta["dec_depths"])
+    patch_sizes = encoder_meta.get("patch_sizes") or enc_patch_size
+    encoder_extra = []
+    if max_points_per_voxel is not None:
+        encoder_extra.append(f"      max_points_per_voxel: {int(max_points_per_voxel)}")
+    if patch_sizes is not None:
+        encoder_extra.append(f"      patch_sizes: {_yaml_list([int(p) for p in patch_sizes])}")
     lines = [
         "/**:",
         "  ros__parameters:",
@@ -173,6 +192,7 @@ def render_ml_package_params(cfg: DictConfig | Mapping[str, Any]) -> str:
         f"      serialization_orders: {_yaml_list([str(o) for o in encoder_meta['serialization_orders']])}",
         f"      pooling_strides: {_yaml_list([int(s) for s in encoder_meta['pooling_strides']])}",
         f"      enc_channels: {_yaml_list([int(c) for c in encoder_meta['enc_channels']])}",
+        *encoder_extra,
         "    segmentation3d:",
         f"      dec_depths: {_yaml_list([int(d) for d in head_meta['dec_depths']])}",
         f"      dec_patch_size: {_yaml_list([int(p) for p in dec_patch_size])}",
@@ -181,6 +201,19 @@ def render_ml_package_params(cfg: DictConfig | Mapping[str, Any]) -> str:
         "",
     ]
     return "\n".join(lines)
+
+
+def _voxels_points_per_voxel(package_dir: Path) -> int | None:
+    """Return the points-per-voxel dimension of the encoder's ``voxels`` input, if it has one."""
+    import onnx
+
+    graph = onnx.load(str(package_dir / f"{ENCODER_MODULE}.onnx"), load_external_data=False).graph
+    for item in graph.input:
+        if item.name == "voxels":
+            dims = item.type.tensor_type.shape.dim
+            if len(dims) == 3 and dims[1].HasField("dim_value"):
+                return int(dims[1].dim_value)
+    return None
 
 
 def _find_stem_conv(encoder: Any) -> tuple[Any, str, Any] | None:
@@ -297,6 +330,123 @@ def legacy_feat4_encoder_spec(spec: Any, device: Any) -> Any:
     )
 
 
+def node_point_channels_encoder_spec(spec: Any, device: Any) -> Any:
+    """Make a ``main``-contract encoder spec take the node's five point channels.
+
+    The multi-sweep node hands the encoder ``(x, y, z, intensity, time_lag)``
+    per point. A model trained without sweeps reads the first four, so its
+    graph is wrapped to accept five channels and drop the time lag in-graph:
+    one slice, the same for every architecture. A model that already reads
+    five channels is returned unchanged.
+
+    Args:
+        spec: The ``main``-contract encoder spec built by the model.
+        device: Device the wrapper lives on.
+
+    Returns:
+        A spec whose ``voxels`` input has :data:`NODE_POINT_CHANNELS` channels.
+    """
+    import torch
+    from torch import nn
+
+    from autoware_ml.utils.deploy import ExportSpec
+
+    names = list(spec.input_names)
+    if names[:3] != ["voxels", "num_points_per_voxel", "grid_coord"]:
+        raise ValueError(f"Unexpected encoder inputs for the main contract: {names[:3]}")
+    voxels, num_points, grid_coord, *rest = spec.args
+    channels = int(voxels.shape[-1])
+    if channels == NODE_POINT_CHANNELS:
+        return spec
+    if channels != LEGACY_FEATURE_CHANNELS:
+        raise ValueError(
+            f"The encoder reads {channels} point channels; the node feeds {NODE_POINT_CHANNELS} "
+            f"and only a {LEGACY_FEATURE_CHANNELS}-channel model can be adapted."
+        )
+
+    class _NodePointsEncoderExportModule(nn.Module):
+        """The encoder graph behind the node's five-channel voxel input."""
+
+        def __init__(self, inner: nn.Module) -> None:
+            super().__init__()
+            self.inner = inner
+
+        def forward(
+            self, voxels: torch.Tensor, num_points: torch.Tensor, grid_coord: torch.Tensor,
+            *rest: torch.Tensor,
+        ) -> tuple[torch.Tensor, ...]:
+            return self.inner(voxels[..., :LEGACY_FEATURE_CHANNELS], num_points, grid_coord, *rest)
+
+    module = _NodePointsEncoderExportModule(spec.module).to(device).eval()
+    padded = torch.cat([voxels, torch.zeros_like(voxels[..., :1])], dim=-1).contiguous()
+    logger.info(
+        "Main contract: encoder wrapped to take %d point channels (model reads %d)",
+        NODE_POINT_CHANNELS, channels,
+    )
+    return ExportSpec(
+        module=module,
+        args=(padded, num_points, grid_coord, *rest),
+        input_names=names,
+        output_names=spec.output_names,
+        dynamic_axes=spec.dynamic_axes,
+        supported_stages=spec.supported_stages,
+    )
+
+
+def redeclare_pruned_inputs(onnx_path: Path, spec: Any) -> list[str]:
+    """Put back graph inputs the exporter dropped because nothing consumes them.
+
+    ``torch.onnx``'s dynamo exporter prunes inputs no node reads. A decoder stage
+    whose blocks are convolution-only reads its ``grid_coord`` but neither its
+    ``patch_order`` nor its ``serialized_inverse``, so those two vanish from the
+    seg-head graph, while the node (autoware_universe#13400's head) requires all
+    three for every stage with decoder blocks and refuses the engine otherwise
+    ("Model does not declare the required IO tensor(s)"). Declaring the unused
+    tensors again keeps the artifact on the node's contract; TensorRT keeps an
+    unused input as a binding and only warns.
+
+    Args:
+        onnx_path: Exported module graph, rewritten in place when inputs are missing.
+        spec: The export spec whose ``input_names`` is the contract.
+
+    Returns:
+        The names put back, in contract order.
+    """
+    import onnx
+    import torch
+    from onnx import TensorProto, helper
+
+    model = onnx.load(str(onnx_path), load_external_data=False)
+    present = {item.name for item in model.graph.input}
+    missing = [name for name in spec.input_names if name not in present]
+    if not missing:
+        return []
+    elem_types = {
+        torch.float32: TensorProto.FLOAT,
+        torch.float16: TensorProto.FLOAT16,
+        torch.int64: TensorProto.INT64,
+        torch.int32: TensorProto.INT32,
+        torch.bool: TensorProto.BOOL,
+    }
+    dynamic_axes = spec.dynamic_axes or {}
+    restored = {}
+    for name, arg in zip(spec.input_names, spec.args, strict=True):
+        if name not in missing:
+            continue
+        axes = dynamic_axes.get(name, {})
+        dims = [axes.get(axis, int(size)) for axis, size in enumerate(arg.shape)]
+        restored[name] = helper.make_tensor_value_info(name, elem_types[arg.dtype], dims)
+    by_name = {item.name: item for item in model.graph.input}
+    by_name.update(restored)
+    ordered = [by_name[name] for name in spec.input_names if name in by_name]
+    ordered += [item for item in model.graph.input if item.name not in spec.input_names]
+    del model.graph.input[:]
+    model.graph.input.extend(ordered)
+    onnx.save(model, str(onnx_path))
+    logger.info("Re-declared %d pruned input(s) on %s: %s", len(missing), onnx_path, missing)
+    return missing
+
+
 def export_package(
     cfg: DictConfig,
     output_dir: Path,
@@ -347,13 +497,26 @@ def export_package(
     device = torch.device("cuda")
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    from autoware_ml.builders.model_builder import build_data_preprocessor, build_model
+
     datamodule = hydra.utils.instantiate(cfg.datamodule)
-    model = hydra.utils.instantiate(cfg.model)
-    model.set_data_preprocessing(hydra.utils.instantiate(cfg.data_preprocessing))
-    model.to(device).eval()
+    # main's models take their data preprocessor at construction (no set_data_preprocessing).
+    model = build_model(
+        cfg,
+        data_preprocessor=build_data_preprocessor(cfg),
+        device=device,
+        weights_path=None,
+        resume_checkpoint_path=None,
+        set_eval=True,
+    )
+    model.eval()
     export_specs = resolve_export_specs(datamodule, model, device)
     if contract == LEGACY_CONTRACT:
         export_specs[ENCODER_MODULE] = legacy_feat4_encoder_spec(
+            export_specs[ENCODER_MODULE], device
+        )
+    else:
+        export_specs[ENCODER_MODULE] = node_point_channels_encoder_spec(
             export_specs[ENCODER_MODULE], device
         )
     git_sha = get_git_sha()
@@ -378,15 +541,8 @@ def export_package(
                         f"{type(submodule).__name__} requires deploy.onnx.precision="
                         f"'{required}', but the module config uses '{precision}'."
                     )
-        export_to_onnx(
-            spec.module,
-            spec.args,
-            module_cfg,
-            spec.input_names,
-            spec.output_names,
-            spec.dynamic_axes,
-            final_path,
-        )
+        # main's helper reads the module, inputs and tensor names from the spec itself.
+        export_to_onnx(spec, module_cfg, final_path)
         path = final_path
         modify_graph_cfg = module_cfg.get("modify_graph", None)
         if should_modify_graph(modify_graph_cfg):
@@ -400,6 +556,10 @@ def export_package(
             path = convert_onnx_precision(path, resolve_onnx_precision(module_cfg))
         if path != final_path:
             path.replace(final_path)
+        if module_name == SEG_HEAD_MODULE:
+            # The node offers the encoder's serialization inputs as optional but requires
+            # the head's; only the head needs the pruned ones put back.
+            redeclare_pruned_inputs(final_path, spec)
         metainfo_cfg = module_cfg.get("metainfo", None)
         metainfo = (
             OmegaConf.to_container(metainfo_cfg, resolve=True) if metainfo_cfg is not None else {}
@@ -423,7 +583,9 @@ def export_package(
         logger.info("Exported %s with %d inputs", final_path, len(inputs[module_name]))
 
     params_path = output_dir / ML_PACKAGE_PARAM_NAME
-    params_path.write_text(render_ml_package_params(cfg))
+    params_path.write_text(
+        render_ml_package_params(cfg, max_points_per_voxel=_voxels_points_per_voxel(output_dir))
+    )
     files[params_path.name] = _sha256(params_path)
     manifest = PackageManifest(
         directory=output_dir,
