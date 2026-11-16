@@ -66,6 +66,8 @@ def test_shipped_configs_are_expressible() -> None:
     assert encoder_depths("2-2-2", "6-2") == (2, 2, 2, 6, 2)
     assert encoder_depths("2-2-2", "2-2") == (2, 2, 2, 2, 2)
     assert DEC_DEPTH_PRESETS["light"] == (0, 0, 1, 1)
+    assert DEC_DEPTH_PRESETS["full"] == (1, 1, 1, 1)
+    assert DEC_DEPTH_PRESETS["double"] == (0, 0, 2, 2)
 
 
 def test_width_preset_rejects_non_dividing_heads() -> None:

@@ -217,7 +217,12 @@ ATTN_DEPTH_PRESETS: Mapping[str, tuple[int, ...]] = {
 # is the published base decoder (unpooling only) and ``light`` is PTv3-tiny's.
 DEC_DEPTH_PRESETS: Mapping[str, tuple[int, ...]] = {
     "none": (0, 0, 0, 0),
+    # The shipped tiny decoder: one block at each of the two coarsest stages.
     "light": (0, 0, 1, 1),
+    # One block at every stage, the published LitePT base decoder depth.
+    "full": (1, 1, 1, 1),
+    # Two blocks at each of the two coarsest stages: the light decoder, twice as deep.
+    "double": (0, 0, 2, 2),
 }
 
 
